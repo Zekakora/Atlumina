@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MyAlbum.App/MyAlbum.App.csproj" />
+    <Project Path="src/MyAlbum.Core/MyAlbum.Core.csproj" />
+    <Project Path="src/MyAlbum.Tools/MyAlbum.Tools.csproj" />
+  </Folder>
+</Solution>

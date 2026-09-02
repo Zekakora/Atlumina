@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MyAlbum Map</title>
+<link rel="stylesheet" href="leaflet.css?v=3" />
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#f3f3f3; }
+  #map { position:absolute; inset:0; }
+  .cluster-icon {
+    background:#0078d4; color:#fff; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font:600 13px "Segoe UI", sans-serif; border:2px solid #fff;
+    box-shadow:0 1px 4px rgba(0,0,0,.3);
+  }
+  .leaflet-div-icon { background:transparent; border:none; }
+  .photo-marker {
+    width:34px; height:34px; border-radius:6px; object-fit:cover;
+    border:2px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,.4);
+    cursor:pointer;
+  }
+  .custom-popup img { width:120px; border-radius:6px; }
+  .custom-popup .name { font:600 12px "Segoe UI"; margin-top:4px; }
+  .custom-popup .time { font:11px "Segoe UI"; color:#666; }
+  /* GPS 工具模式图钉：编号绿锚点（带参考拍摄时间）+ 红钉 */
+  .anchor-box { display:flex; align-items:center; cursor:pointer; }
+  .anchor-num {
+    width:22px; height:22px; border-radius:50%;
+    background:#2ea043; color:#fff; border:2px solid #fff;
+    box-shadow:0 1px 4px rgba(0,0,0,.5);
+    font:700 11px "Segoe UI", sans-serif;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .anchor-time {
+    margin-left:4px; padding:1px 5px; border-radius:4px;
+    background:rgba(0,0,0,.72); color:#fff;
+    font:600 10px "Segoe UI", sans-serif; white-space:nowrap;
+  }
+  .red-pin {
+    width:22px; height:22px; border-radius:50%;
+    background:#d13438; border:2px solid #fff;
+    box-shadow:0 1px 4px rgba(0,0,0,.5); cursor:grab;
+  }
+  /* 右栏小地图单点图钉（红色） */
+  .single-pin {
+    width:16px; height:16px; border-radius:50%;
+    background:#d13438; border:2px solid #fff;
+    box-shadow:0 1px 3px rgba(0,0,0,.4);
+  }
+  /* 时光机到站气泡（随机弹跳动效） */
+  .tour-pin {
+    padding:2px 10px; border-radius:12px; background:#0078d4; color:#fff;
+    font:600 11px "Segoe UI", sans-serif; box-shadow:0 2px 8px rgba(0,0,0,.4);
+    white-space:nowrap; text-align:center;
+    animation: tour-pop var(--dur, .45s) ease-out;
+    transform-origin:center bottom;
+  }
+  @keyframes tour-pop {
+    0%   { transform: scale(.2) rotate(var(--rot, 0deg)); opacity: 0; }
+    60%  { transform: scale(1.18) rotate(var(--rot, 0deg)); opacity: 1; }
+    100% { transform: scale(1) rotate(var(--rot, 0deg)); opacity: 1; }
+  }
+  /* 持久聚合点标记的到达日期提示 */
+  .tour-tooltip {
+    font:600 12px "Segoe UI", sans-serif !important;
+    padding:4px 8px !important;
+    border-radius:6px !important;
+    line-height:1.4 !important;
+    box-shadow:0 2px 6px rgba(0,0,0,.3) !important;
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  // Registered before the external scripts so we can see whether each one loads.
+  function bridgeLog(msg) {
+    if (window.chrome && chrome.webview) {
+      chrome.webview.postMessage({ type: 'log', text: msg });
+    }
+  }
+  document.addEventListener('error', function (e) {
+    var t = e.target;
+    if (t && t.tagName === 'SCRIPT') bridgeLog('SCRIPT LOAD FAILED: ' + t.src);
+  }, true);
+  document.addEventListener('load', function (e) {
+    var t = e.target;
+    if (t && t.tagName === 'SCRIPT') bridgeLog('SCRIPT LOADED: ' + t.src);
+  }, true);
+</script>
+<script src="leaflet.js?v=3"></script>
+<script src="supercluster.min.js?v=3"></script>
+<script>
+  // Earliest diagnostics: runs before any library, so we can tell whether the
+  // inline script executes at all and whether the WebView2 bridge + libs exist.
+  function log(msg) {
+    if (window.chrome && chrome.webview) {
+      chrome.webview.postMessage({ type: 'log', text: msg });
+    }
+  }
+  window.onerror = function (msg, url, line, col) {
+    log('JS ERROR at ' + url + ':' + line + ' ' + msg);
+    return false;
+  };
+  log('script start, chrome.webview=' + !!(window.chrome && chrome.webview) +
+      ' L=' + (typeof L) + ' supercluster=' + (typeof Supercluster));
+
+  var map = L.map('map', { zoomControl: true }).setView([35.0, 105.0], 4);
+
+  // --- 国内源坐标系统：WGS-84（相机 GPS）↔ GCJ-02（高德/腾讯） ---
+  var COORD_A = 6378245.0, COORD_EE = 0.00669342162296594323;
+  function outOfChina(lat, lon) { return lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271; }
+  function _tlat(x, y) {
+    var r = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    r += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    r += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+    r += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320.0 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+    return r;
+  }
+  function _tlon(x, y) {
+    var r = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    r += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+    r += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+    r += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+    return r;
+  }
+  function wgs84ToGcj02(lat, lon) {
+    if (outOfChina(lat, lon)) return [lat, lon];
+    var dLat = _tlat(lon - 105.0, lat - 35.0);
+    var dLon = _tlon(lon - 105.0, lat - 35.0);
+    var radLat = lat / 180.0 * Math.PI;
+    var magic = Math.sin(radLat); magic = 1 - COORD_EE * magic * magic;
+    var sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((COORD_A * (1 - COORD_EE)) / (magic * sqrtMagic) * Math.PI);
+    dLon = (dLon * 180.0) / (COORD_A / sqrtMagic * Math.cos(radLat) * Math.PI);
+    return [lat + dLat, lon + dLon];
+  }
+  function gcj02ToWgs84(lat, lon) {
+    if (outOfChina(lat, lon)) return [lat, lon];
+    var w = wgs84ToGcj02(lat, lon);
+    return [2 * lat - w[0], 2 * lon - w[1]];
+  }
+
+  var coordMode = 'wgs84';
+  function toView(lat, lon) { return coordMode === 'gcj02' ? wgs84ToGcj02(lat, lon) : [lat, lon]; }
+  function fromView(lat, lon) { return coordMode === 'gcj02' ? gcj02ToWgs84(lat, lon) : [lat, lon]; }
+
+  var tileLayer = null;
+  function setTileSource(source) {
+    if (tileLayer) map.removeLayer(tileLayer);
+    coordMode = 'wgs84';
+    var url = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    var subdomains = 'abc';
+    var attrs = '&copy; OpenStreetMap contributors';
+    if (source === 'tencent') {
+      // 腾讯地图：国内路网 + 中文地名最全，GCJ-02 坐标。
+      url = 'https://rt{s}.map.gtimg.com/tile?z={z}&x={x}&y={y}&styleid=1&version=297';
+      subdomains = '0123'; coordMode = 'gcj02'; attrs = '&copy; 腾讯地图';
+    } else if (source === 'tencent_sat') {
+      // 腾讯卫星影像（注记层 styleid=100）。
+      url = 'https://rt{s}.map.gtimg.com/tile?z={z}&x={x}&y={y}&styleid=100&version=297';
+      subdomains = '0123'; coordMode = 'gcj02'; attrs = '&copy; 腾讯地图';
+    } else if (source === 'amap') {
+      url = 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}';
+      subdomains = '1234'; coordMode = 'gcj02'; attrs = '&copy; 高德地图';
+    } else if (source === 'amap_sat') {
+      url = 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}';
+      subdomains = '1234'; coordMode = 'gcj02'; attrs = '&copy; 高德地图';
+    }
+    tileLayer = L.tileLayer(url, { maxZoom: 19, subdomains: subdomains, attribution: attrs }).addTo(map);
+    log('tile source=' + source + ' coordMode=' + coordMode);
+  }
+  setTileSource('tencent');
+
+  // Photos received from C#: [{id,lat,lon,file,time,thumb}]
+  // Cluster count comes from supercluster's native `point_count` property
+  // (a custom reduce seeded without a `count` field would produce NaN).
+  var index = new Supercluster({
+    radius: 60,
+    maxZoom: 16,
+    minPoints: 2,
+    map: function (p) { return { cluster: false, photo: p }; }
+  });
+  log('libs loaded, map init ok');
+
+  var markers = L.layerGroup().addTo(map);
+  var currentZoom = map.getZoom();
+
+  // All photos with GPS, plus the active time filter (unix ms, null = no filter).
+  var allPhotos = [];
+  var minTs = null;
+  var maxTs = null;
+  var filterTimer = null;
+
+  function buildFeature(p) {
+    return { type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] }, properties: p };
+  }
+
+  // 兼容 supercluster 叶子 properties 的两种结构：{cluster:false, photo:...} 或原始照片对象。
+  function featurePhoto(f) {
+    var props = f.properties || {};
+    return props.photo || props;
+  }
+
+  function inRange(p) {
+    return minTs == null || maxTs == null || (p.ts >= minTs && p.ts <= maxTs);
+  }
+
+  function filteredPhotos() {
+    return allPhotos.filter(inRange);
+  }
+
+  // Rebuild the cluster index from the time-filtered photos and re-render.
+  function applyFilter() {
+    index.load(filteredPhotos().map(buildFeature));
+    refresh();
+  }
+
+  function fitTo(photos) {
+    if (!photos.length) return;
+    var pts = photos.map(function (p) { return toView(p.lat, p.lon); });
+    var lats = pts.map(function (pt) { return pt[0]; });
+    var lons = pts.map(function (pt) { return pt[1]; });
+    map.fitBounds([[Math.min.apply(null, lats), Math.min.apply(null, lons)],
+                   [Math.max.apply(null, lats), Math.max.apply(null, lons)]], { padding: [40, 40] });
+  }
+
+  // Debounce index rebuilds while the user drags the time ruler.
+  function scheduleFilter(commit) {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(function () {
+      applyFilter();
+      if (commit) fitTo(filteredPhotos());
+    }, 60);
+  }
+
+  function refresh() {
+    if (toolActive || tourActive || tourDone) return;
+    try {
+      var bounds = map.getBounds();
+      // supercluster 里是 WGS-84；GCJ-02 图源下视口 bbox 是火星坐标，放大后会偏出照片，
+      // 必须把视口角点经 fromView 转回 WGS-84 再查询。
+      var sw = fromView(bounds.getSouth(), bounds.getWest());
+      var ne = fromView(bounds.getNorth(), bounds.getEast());
+      var features = index.getClusters(
+        [sw[1], sw[0], ne[1], ne[0]],
+        currentZoom
+      );
+      markers.clearLayers();
+      features.forEach(function (f) {
+        if (f.properties.cluster) {
+          var count = f.properties.point_count;
+          var size = 34 + Math.min(20, Math.log(count) * 8);
+          var el = L.divIcon({
+            className: 'leaflet-div-icon',
+            html: '<div class="cluster-icon" style="width:' + size + 'px;height:' + size + 'px">' + count + '</div>',
+            iconSize: [size, size]
+          });
+          var cpt = toView(f.geometry.coordinates[1], f.geometry.coordinates[0]);
+          var m = L.marker(cpt, { icon: el });
+          m.on('click', function () {
+            map.flyTo(m.getLatLng(), Math.min(currentZoom + 2, 16), { duration: 0.4 });
+            notifyCluster(f.properties.cluster_id);
+          });
+          m.addTo(markers);
+        } else {
+          var p = featurePhoto(f);
+          // 越放大照片标记越大，最大缩放时看清单张照片（无聚合）。
+          var pm = Math.min(64, 34 + Math.max(0, currentZoom - 13) * 7);
+          var icon = p.thumb
+            ? L.divIcon({ className: 'leaflet-div-icon', html: '<img class="photo-marker" src="' + p.thumb + '" style="width:' + pm + 'px;height:' + pm + 'px">', iconSize: [pm, pm] })
+            : L.divIcon({ className: 'leaflet-div-icon', html: '<div class="photo-marker" style="width:' + pm + 'px;height:' + pm + 'px;background:#666"></div>', iconSize: [pm, pm] });
+          var v = toView(p.lat, p.lon);
+          var m = L.marker(v, { icon: icon });
+          m.on('click', function () {
+            notifySelect(p.id);
+            var popup = L.popup({ className: 'custom-popup', offset: [0, -18] })
+              .setLatLng(v)
+              .setContent('<div>' +
+                (p.thumb ? '<img class="popup-thumb" src="' + p.thumb + '" title="双击打开全屏查看" style="cursor:pointer">' : '') +
+                '<div class="name">' + escapeHtml(p.file) + '</div>' +
+                '<div class="time">' + escapeHtml(p.time) + '</div></div>');
+            m.bindPopup(popup).openPopup();
+            var imgEl = popup.getElement() && popup.getElement().querySelector('.popup-thumb');
+            if (imgEl) {
+              imgEl.addEventListener('dblclick', function () {
+                post({ type: 'viewphoto', id: p.id });
+              });
+            }
+          });
+          m.addTo(markers);
+        }
+      });
+      log('refresh zoom=' + currentZoom + ' markers=' + markers.getLayers().length);
+    } catch (err) {
+      log('refresh ERROR: ' + err.message);
+    }
+  }
+
+  map.on('moveend', function () { currentZoom = map.getZoom(); refresh(); });
+  map.on('zoomend', function () { currentZoom = map.getZoom(); refresh(); });
+
+  function notifySelect(id) {
+    if (window.chrome && chrome.webview) {
+      chrome.webview.postMessage({ type: 'select', id: id });
+    }
+  }
+
+  // Cluster clicked: send the ids of every photo in that cluster so C# can show
+  // them in the native side panel.
+  function notifyCluster(clusterId) {
+    if (window.chrome && chrome.webview) {
+      var leaves = index.getLeaves(clusterId, 100000, 0);
+      var ids = [];
+      leaves.forEach(function (l) {
+        var ph = (l.properties || {}).photo || l.properties || {};
+        if (ph.id != null) ids.push(ph.id);
+      });
+      chrome.webview.postMessage({ type: 'cluster', ids: ids });
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  // --- GPS 工具模式：绿色锚点钉 + 单个可拖拽红钉（整组一起走） ---
+  var toolActive = false;
+  var toolSelectionCount = 0;
+  var editLayers = L.layerGroup().addTo(map);
+  var redPin = null;
+
+  function post(msg) {
+    if (window.chrome && chrome.webview) chrome.webview.postMessage(msg);
+  }
+  function notifyMoved(lat, lon) { post({ type: 'moved', lat: lat, lon: lon }); }
+  function notifyAnchor(id) { post({ type: 'anchor', id: id }); }
+
+  function onMapClick(e) {
+    if (!toolActive || !toolSelectionCount) return;
+    moveRedPin(e.latlng.lat, e.latlng.lng);
+    var w = fromView(e.latlng.lat, e.latlng.lng);
+    notifyMoved(w[0], w[1]);
+  }
+
+  function moveRedPin(lat, lng) {
+    if (!redPin) {
+      redPin = L.marker([lat, lng], {
+        draggable: true,
+        icon: L.divIcon({ className: 'leaflet-div-icon', html: '<div class="red-pin"></div>', iconSize: [22, 22], iconAnchor: [11, 11] })
+      });
+      redPin.on('dragend', function () {
+        var ll = redPin.getLatLng();
+        var w = fromView(ll.lat, ll.lng);
+        notifyMoved(w[0], w[1]);
+      });
+      editLayers.addLayer(redPin);
+    } else {
+      redPin.setLatLng([lat, lng]);
+    }
+  }
+
+  function showTool(msg) {
+    toolActive = true;
+    toolSelectionCount = (msg.selected || []).length;
+    markers.clearLayers();
+    editLayers.clearLayers();
+    var hadPin = redPin != null;
+    redPin = null;
+    map.on('click', onMapClick);
+    (msg.anchors || []).forEach(function (a) {
+      var pt = toView(a.lat, a.lon);
+      var html = '<div class="anchor-box">' +
+        '<div class="anchor-num">' + a.num + '</div>' +
+        '<div class="anchor-time">' + escapeHtml(a.time || '') + '</div></div>';
+      var m = L.marker(pt, {
+        icon: L.divIcon({ className: 'leaflet-div-icon', html: html, iconSize: [92, 24], iconAnchor: [11, 11] }),
+        title: a.file
+      });
+      m.on('click', function () { notifyAnchor(a.id); });
+      editLayers.addLayer(m);
+    });
+    var sel = msg.selected || [];
+    // 目标位置（WGS-84）。只在所有选中照片落在同一个点上时才显示红点——
+    // 自动修复把照片分到不同锚点时，平均值没有意义，就不画红点。
+    var distinct = [];
+    sel.forEach(function (s) {
+      if (s.lat == null || s.lon == null) return;
+      var dup = distinct.some(function (d) {
+        return Math.abs(d[0] - s.lat) < 1e-6 && Math.abs(d[1] - s.lon) < 1e-6;
+      });
+      if (!dup) distinct.push([s.lat, s.lon]);
+    });
+    if (distinct.length === 1) {
+      var v = toView(distinct[0][0], distinct[0][1]);
+      moveRedPin(v[0], v[1]);
+      if (msg.fit) {
+        if (!hadPin) map.setView([v[0], v[1]], Math.max(map.getZoom(), 13));
+        else map.panTo([v[0], v[1]]);
+      }
+    } else if (distinct.length > 1) {
+      log('targets heterogeneous (' + distinct.length + ' points), no red pin');
+    } else if (msg.fit && !toolSelectionCount && (msg.anchors || []).length > 0) {
+      var lats = msg.anchors.map(function (a) { return toView(a.lat, a.lon)[0]; });
+      var lons = msg.anchors.map(function (a) { return toView(a.lat, a.lon)[1]; });
+      map.fitBounds([[Math.min.apply(null, lats), Math.min.apply(null, lons)],
+                     [Math.max.apply(null, lats), Math.max.apply(null, lons)]], { padding: [40, 40] });
+    }
+    log('tool mode: anchors=' + (msg.anchors || []).length + ' selected=' + sel.length);
+    if ((msg.anchors || []).length > 0) {
+      var d0 = msg.anchors[0];
+      var dv = toView(d0.lat, d0.lon);
+      log('anchor#1 raw=' + d0.lat.toFixed(6) + ',' + d0.lon.toFixed(6) +
+          ' -> view=' + dv[0].toFixed(6) + ',' + dv[1].toFixed(6) + ' coordMode=' + coordMode);
+    }
+  }
+
+  function clearTool() {
+    toolActive = false;
+    toolSelectionCount = 0;
+    editLayers.clearLayers();
+    redPin = null;
+    map.off('click', onMapClick);
+  }
+
+  // --- 时光机：按时间顺序沿大圆曲线逐个游览聚合点 ---
+  var tourActive = false;
+  var tourStopTimer = null;
+  var tourPinTimer = null;
+  var tourLayer = L.layerGroup().addTo(map);   // 到站气泡
+  var pathLayer = L.layerGroup().addTo(map);   // 大圆轨迹
+  var pathLine = null;
+  var pathGlow = null;                          // 轨迹下层淡蓝光晕（伪3D）
+  var pathPoints = [];                          // 已走过的轨迹点（视图坐标）
+  var stopMarkerLayer = L.layerGroup().addTo(map); // 经过聚合点的持久标记
+  var stopMarkers = {};                         // key -> {marker, dates[]}
+  var tourDone = false;                         // 播放完毕、轨迹待保留
+  var suppressCancel = false;                   // 程序化 fitBounds 时屏蔽取消
+  var tourSpeed = 1.0;                          // 用户设定的播放倍数
+  var msgSpeed = 1.0;                           // C# 传来的最近一次倍速
+  var tourFlightMs = 1500;
+  var tourDwell = 2200;
+
+  function formatDate(ts) {
+    var d = new Date(ts);
+    function p(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function llToVec(lat, lon) {
+    var phi = lat * Math.PI / 180, lam = lon * Math.PI / 180;
+    return [Math.cos(phi) * Math.cos(lam), Math.cos(phi) * Math.sin(lam), Math.sin(phi)];
+  }
+  function vecToLl(v) {
+    return [Math.asin(v[2]) * 180 / Math.PI, Math.atan2(v[1], v[0]) * 180 / Math.PI];
+  }
+  // 大圆（球面插值）上 t∈[0,1] 处的点，返回 [lat, lon]（WGS-84）。
+  function gcPoint(aLat, aLon, bLat, bLon, t) {
+    var a = llToVec(aLat, aLon), b = llToVec(bLat, bLon);
+    var dot = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+    var theta = Math.acos(dot);
+    if (theta < 1e-8) return [bLat, bLon];
+    var sin = Math.sin(theta);
+    var wa = Math.sin((1 - t) * theta) / sin;
+    var wb = Math.sin(t * theta) / sin;
+    var v = [wa * a[0] + wb * b[0], wa * a[1] + wb * b[1], wa * a[2] + wb * b[2]];
+    return vecToLl(v);
+  }
+  // 两点大圆角距离（度）。
+  function gcDistDeg(aLat, aLon, bLat, bLon) {
+    var a = llToVec(aLat, aLon), b = llToVec(bLat, bLon);
+    var dot = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+    return Math.acos(dot) * 180 / Math.PI;
+  }
+  // 伪3D大圆弧线：真大圆基础上再向最近极点抬升隆起（t∈[0,1]）。
+  // 真大圆在东西向（同纬度）时在墨卡托上是直线，加隆起后始终可见明显弧线。
+  function arcPoint(aLat, aLon, bLat, bLon, t) {
+    var g = gcPoint(aLat, aLon, bLat, bLon, t);
+    var towardNorth = (aLat + bLat) / 2 >= 0;
+    var h = Math.min(20, gcDistDeg(aLat, aLon, bLat, bLon) * 0.25);
+    var bulge = 4 * h * t * (1 - t);
+    return [g[0] + (towardNorth ? bulge : -bulge), g[1]];
+  }
+
+  function stopTour() {
+    tourActive = false;
+    tourDone = false;
+    clearTimeout(tourStopTimer);
+    clearTimeout(tourPinTimer);
+    tourLayer.clearLayers();
+    pathLayer.clearLayers();
+    pathLine = null;
+    pathGlow = null;
+    pathPoints = [];
+    stopMarkerLayer.clearLayers();
+    stopMarkers = {};
+    refresh();
+  }
+
+  // 到站：瞬态随机弹跳气泡 + 持久圆形标记（悬停显示到达日期，多次到达则累积）。
+  function arrive(stop) {
+    var v = toView(stop.lat, stop.lon);
+    var html = '<div class="tour-pin" style="--dur:' + (0.30 + Math.random() * 0.40).toFixed(2) +
+      's;--rot:' + (Math.round(Math.random() * 40) - 20) + 'deg">' + formatDate(stop.ts) + '</div>';
+    var m = L.marker(v, {
+      icon: L.divIcon({ className: 'leaflet-div-icon', html: html, iconSize: [120, 30], iconAnchor: [60, 15] }),
+      zIndexOffset: 2000,
+      interactive: false
+    });
+    m.addTo(tourLayer);
+    tourPinTimer = setTimeout(function () { tourLayer.removeLayer(m); }, tourDwell - 250);
+
+    var dateStr = formatDate(stop.ts);
+    var entry = stopMarkers[stop.key];
+    if (!entry) {
+      var cm = L.circleMarker(v, {
+        radius: 8, color: '#ffffff', weight: 2, fillColor: '#0078d4', fillOpacity: 0.95
+      }).addTo(stopMarkerLayer);
+      cm.bindTooltip('到达日期\n' + dateStr, { sticky: true, direction: 'top', className: 'tour-tooltip' });
+      stopMarkers[stop.key] = { marker: cm, dates: [dateStr] };
+    } else {
+      if (entry.dates.indexOf(dateStr) === -1) entry.dates.push(dateStr);
+      entry.marker.setTooltipContent('到达日期\n' + entry.dates.join('\n'));
+    }
+  }
+
+  // 追加一个轨迹点（视图坐标）：下层淡蓝光晕 + 上层实线（伪3D大圆轨迹）。
+  function appendPathPoint(p) {
+    pathPoints.push(p);
+    if (!pathLine) {
+      pathGlow = L.polyline([p], { color: '#66b5ff', weight: 7, opacity: 0.35, interactive: false }).addTo(pathLayer);
+      pathLine = L.polyline([p], { color: '#0078d4', weight: 2.5, opacity: 0.95, interactive: false }).addTo(pathLayer);
+    } else {
+      pathGlow.addLatLng(p);
+      pathLine.addLatLng(p);
+    }
+  }
+
+  function flyGreatCircle(a, b, onDone) {
+    var start = performance.now();
+    var flightMs = tourFlightMs / tourSpeed;
+    // 预计算本段伪3D大圆弧线采样点（视图坐标）。
+    var gc = [];
+    for (var i = 0; i <= 64; i++) gc.push(arcPoint(a.lat, a.lon, b.lat, b.lon, i / 64));
+    var pts = gc.map(function (g) { return toView(g[0], g[1]); });
+    var appended = 0;
+    function frame(now) {
+      if (!tourActive) return;
+      var t = Math.min(1, (now - start) / flightMs);
+      var eased = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      var g = arcPoint(a.lat, a.lon, b.lat, b.lon, eased);
+      var v = toView(g[0], g[1]);
+      map.setView([v[0], v[1]], currentZoom, { animate: false });
+      // 轨迹随相机延伸。
+      var ti = Math.floor(eased * (pts.length - 1));
+      while (appended < ti) {
+        appended++;
+        appendPathPoint(pts[appended]);
+      }
+      if (t < 1) requestAnimationFrame(frame);
+      else onDone();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function walkTour(stops, i) {
+    if (!tourActive) return;
+    if (i >= stops.length) { finishTour(); return; }
+      var target = stops[i];
+    if (i === 0) {
+      var v0 = toView(target.lat, target.lon);
+      map.setView([v0[0], v0[1]], currentZoom, { animate: false });
+      appendPathPoint(v0);
+      arrive(target);
+      tourStopTimer = setTimeout(function () { walkTour(stops, i + 1); }, tourDwell / tourSpeed);
+    } else {
+      flyGreatCircle(stops[i - 1], target, function () {
+        arrive(target);
+        tourStopTimer = setTimeout(function () { walkTour(stops, i + 1); }, tourDwell / tourSpeed);
+      });
+    }
+  }
+
+  function finishTour() {
+    tourActive = false;
+    tourDone = true;
+    tourLayer.clearLayers();       // 只清到站气泡，轨迹保留
+    if (pathPoints.length >= 2) {
+      // animate:false 让缩放同步完成，避免异步动画在 suppressCancel 复位后触发 zoomstart 把自己取消
+      suppressCancel = true;
+      map.fitBounds(L.latLngBounds(pathPoints), { padding: [50, 50], animate: false });
+      suppressCancel = false;
+    }
+    post({ type: 'tour', state: 'done' });
+  }
+
+  // 构建游览停靠点：按「天」分组——同一天同一聚合点只停一次；同一天跨多个聚合点则多次停。
+  // 这样时间上某天又回到之前去过的聚合点时会再走一次，持久标记会累积多条到达日期。
+  function buildStops() {
+    var features;
+    try {
+      features = index.getClusters([-180, -90, 180, 90], currentZoom);
+    } catch (err) {
+      log('tour getClusters err: ' + err.message);
+      return [];
+    }
+    var photoToKey = {};
+    var stopDefs = {};
+    features.forEach(function (f) {
+      var props = f.properties || {};
+      if (props.cluster) {
+        var key = 'c' + props.cluster_id;
+        stopDefs[key] = { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] };
+        var leaves = index.getLeaves(props.cluster_id, 100000, 0);
+        leaves.forEach(function (l) {
+          var ph = (l.properties || {}).photo || l.properties || {};
+          if (ph.id != null) photoToKey[ph.id] = key;
+        });
+      } else {
+        var ph = props.photo || props;
+        var key = 'p' + ph.id;
+        stopDefs[key] = { lat: ph.lat, lon: ph.lon };
+        if (ph.id != null) photoToKey[ph.id] = key;
+      }
+    });
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    var byDay = {};
+    allPhotos.forEach(function (p) {
+      var key = photoToKey[p.id];
+      if (!key) return;
+      var d = new Date(p.ts);
+      var day = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+      (byDay[day] = byDay[day] || []).push(p);
+    });
+    var stops = [];
+    // 连续去重：同一个聚合点（key）连续出现时只停一次；只有跳去别的聚合点之后再回到
+    // 该点，才允许重新展示。这样「原地多次展示」被合并成一次。
+    var lastKey = null;
+    Object.keys(byDay).sort().forEach(function (day) {
+      byDay[day].slice().sort(function (a, b) { return a.ts - b.ts; }).forEach(function (p) {
+        var key = photoToKey[p.id];
+        var def = stopDefs[key];
+        if (!def || !isFinite(def.lat) || !isFinite(def.lon)) return;
+        if (key === lastKey) return;
+        lastKey = key;
+        stops.push({ key: key, lat: def.lat, lon: def.lon, ts: p.ts });
+      });
+    });
+    return stops;
+  }
+
+  function startTour() {
+    if (tourActive) return;
+    tourSpeed = Math.max(0.1, Math.min(20, Number(msgSpeed) > 0 ? msgSpeed : 1));
+    markers.clearLayers();
+    editLayers.clearLayers();
+    tourLayer.clearLayers();
+    pathLayer.clearLayers();
+    pathLine = null;
+    pathGlow = null;
+    pathPoints = [];
+    stopMarkerLayer.clearLayers();
+    stopMarkers = {};
+    tourDone = false;
+    var stops = buildStops();
+    var capped = stops.slice(0, 100);
+    log('tour stops=' + stops.length + ' (capped ' + capped.length + ')');
+    if (!capped.length) {
+      post({ type: 'tour', state: 'done' });
+      return;
+    }
+    tourActive = true;
+    walkTour(capped, 0);
+  }
+
+  // 播放中用户拖动/缩放才取消；播放完的轨迹保留，只有再次按「时光机」才清除。
+  map.on('dragstart zoomstart', function () {
+    if (!suppressCancel && tourActive) stopTour();
+  });
+
+  // --- 右栏小地图：单张照片位置（红色图钉，默认高缩放，可拖动/缩放） ---
+  function showSingle(msg) {
+    stopTour();
+    clearTool();
+    markers.clearLayers();
+    editLayers.clearLayers();
+    if (msg.lat == null || msg.lon == null) return;
+    var v = toView(msg.lat, msg.lon);
+    var m = L.marker(v, {
+      icon: L.divIcon({ className: 'leaflet-div-icon', html: '<div class="single-pin"></div>', iconSize: [16, 16], iconAnchor: [8, 8] }),
+      zIndexOffset: 1000
+    });
+    m.addTo(markers);
+    map.setView([v[0], v[1]], msg.zoom || 15, { animate: false });
+  }
+
+  // Messages from C#.
+  if (window.chrome && chrome.webview) {
+    chrome.webview.addEventListener('message', function (e) {
+      var msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
+      if (msg.type === 'single') {
+        showSingle(msg);
+      } else if (msg.type === 'timemachine') {
+        msgSpeed = Number(msg.speed) > 0 ? Number(msg.speed) : 1;
+        if (msg.start) startTour();
+        else stopTour();
+      } else if (msg.type === 'tiles') {
+        setTileSource(msg.source || 'osm');
+        refresh();
+      } else if (msg.type === 'tool') {
+        showTool(msg);
+      } else if (msg.type === 'toolclear') {
+        clearTool();
+      } else if (msg.type === 'photos') {
+        clearTool();
+        log('photos message received, count=' + (msg.photos ? msg.photos.length : 'null'));
+        allPhotos = msg.photos || [];
+        minTs = null;
+        maxTs = null;
+        if (allPhotos.length > 0) {
+          log('first photo lat=' + allPhotos[0].lat + ' lon=' + allPhotos[0].lon + ' ts=' + allPhotos[0].ts);
+        }
+        applyFilter();
+        fitTo(allPhotos);
+      } else if (msg.type === 'timefilter') {
+        minTs = msg.minTs || null;
+        maxTs = msg.maxTs || null;
+        scheduleFilter(!!msg.commit);
+      } else if (msg.type === 'fit') {
+        if (msg.bounds) map.fitBounds(msg.bounds, { padding: [40, 40] });
+        refresh();
+      }
+    });
+  }
+
+  refresh();
+</script>
+</body>
+</html>

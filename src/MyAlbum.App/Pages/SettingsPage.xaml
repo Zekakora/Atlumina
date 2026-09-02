@@ -1,0 +1,450 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="MyAlbum_App.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:MyAlbum_App.ViewModels"
+    xmlns:conv="using:MyAlbum_App.Converters"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:InvertBoolConverter x:Key="InvertBool" />
+    </Page.Resources>
+
+    <ScrollViewer>
+        <StackPanel MaxWidth="820" HorizontalAlignment="Left" Margin="32,24,32,32" Spacing="16">
+
+            <!-- Page header -->
+            <StackPanel Spacing="2" Margin="0,0,0,8">
+                <TextBlock Text="设置" Style="{StaticResource TitleTextBlockStyle}" />
+                <TextBlock Text="资料库、界面显示与外部工具配置。" Style="{StaticResource CardDescStyle}" />
+            </StackPanel>
+
+            <!-- Library -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE8B7;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="资料库" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="导入文件夹、管理显示与移除图库条目" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.ImportFolderCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE8B5;" FontSize="14" />
+                                <TextBlock Text="导入文件夹…" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelImportCommand}"
+                                Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消导入" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="ManageFolders_OnClick">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE8B7;" FontSize="14" />
+                                <TextBlock Text="文件夹显示管理…" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.Progress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.CurrentFileText, Mode=OneWay}" FontSize="11" TextTrimming="CharacterEllipsis"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <NumberBox Header="扫描 / 导入并发数（1-64）"
+                               Minimum="1" Maximum="64"
+                               Value="{x:Bind ViewModel.ScanParallelism, Mode=TwoWay}"
+                               HorizontalAlignment="Left" Width="240"
+                               SpinButtonPlacementMode="Inline" SmallChange="1" LargeChange="4" />
+                    <TextBlock Text="同时解码缩略图的文件数。多个文件夹会并行扫描，但同时在处理的文件总数被限制为该值；硬盘快（如 NVMe）可调高以缩短首次扫描时间。"
+                               Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <!-- Original-photo protection -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE72E;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="原始照片保护" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="防止任何修改、删除或重命名原始照片文件的操作" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <ToggleSwitch Header="保护原始照片（禁止修改/删除/重命名原图）"
+                                  OnContent="已保护" OffContent="未保护"
+                                  IsOn="{x:Bind ViewModel.ProtectOriginalData, Mode=TwoWay}" />
+                    <TextBlock Text="开启后以下操作将被禁止：EXIF 编辑、GPS 写回、拍摄时间修复、去重/格式清理删除、批量重命名。星级评分、标签、智能相册等仅写入数据库的功能不受影响。" Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <!-- Appearance -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE790;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="外观" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="界面明暗模式" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="选择应用外观。跟随系统时，应用会随 Windows 的浅色/深色设置变化。" Style="{StaticResource CardDescStyle}" />
+                    <ComboBox
+                        ItemsSource="{x:Bind ViewModel.ThemeOptions}"
+                        DisplayMemberPath="Label"
+                        SelectedValuePath="Key"
+                        SelectedValue="{x:Bind ViewModel.AppTheme, Mode=TwoWay}"
+                        HorizontalAlignment="Left"
+                        MinWidth="200" />
+                </StackPanel>
+            </Border>
+
+            <!-- Interface -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE713;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="界面" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="主页顶部区域与信息栏显示" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <ToggleSwitch Header="显示提醒栏（AI 提醒区域）"
+                                  OnContent="显示" OffContent="隐藏"
+                                  IsOn="{x:Bind ViewModel.IsReminderVisible, Mode=TwoWay}" />
+                </StackPanel>
+            </Border>
+            <!-- Right-panel info fields -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE8A5;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="右栏信息字段" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="在主页右栏显示哪些照片信息" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <Grid ColumnSpacing="16" RowSpacing="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <ToggleSwitch Header="文件名" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowFileName, Mode=TwoWay}" />
+                            <ToggleSwitch Header="拍摄时间" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowTakenTime, Mode=TwoWay}" />
+                            <ToggleSwitch Header="相机型号" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowCamera, Mode=TwoWay}" />
+                            <ToggleSwitch Header="镜头" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowLens, Mode=TwoWay}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="4">
+                            <ToggleSwitch Header="曝光参数（ISO / 快门 / 光圈 / 焦距）" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowExposure, Mode=TwoWay}" />
+                            <ToggleSwitch Header="尺寸" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowDimensions, Mode=TwoWay}" />
+                            <ToggleSwitch Header="GPS 位置" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowGps, Mode=TwoWay}" />
+                            <ToggleSwitch Header="拍摄地址" OnContent="显示" OffContent="隐藏"
+                                          IsOn="{x:Bind ViewModel.ShowLocation, Mode=TwoWay}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Map -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE707;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="地图" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="地图视图与 GPS 工具使用的瓦片源" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="地图瓦片源。国内源（高德/腾讯）在国内访问更快；照片 GPS 为 WGS-84，应用会自动校正国内源的 GCJ-02 偏移。" Style="{StaticResource CardDescStyle}" />
+                    <ComboBox
+                        ItemsSource="{x:Bind ViewModel.MapTileOptions}"
+                        DisplayMemberPath="Label"
+                        SelectedValuePath="Key"
+                        SelectedValue="{x:Bind ViewModel.MapTileSource, Mode=TwoWay}"
+                        HorizontalAlignment="Left"
+                        MinWidth="380" />
+                </StackPanel>
+            </Border>
+
+            <!-- 大语言模型 -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE943;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="大语言模型" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="把 GPS 解析出的地址规范化为「国家-省-市-区县-地标」五级结构" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="使用 OpenAI 兼容的 Chat Completions 接口（默认 DeepSeek）。API 密钥仅保存在本机 settings.json。配置后到 AI 功能页点「规范地址」。"
+                               Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                    <TextBox Header="模型名" PlaceholderText="如 deepseek-v4-flash"
+                             Text="{x:Bind ViewModel.LlmModel, Mode=TwoWay}" />
+                    <TextBox Header="API 密钥" PlaceholderText="sk-…"
+                             Text="{x:Bind ViewModel.LlmApiKey, Mode=TwoWay}" />
+                    <TextBox Header="请求地址（完整 chat/completions 端点）" PlaceholderText="https://opencode.ai/zen/go/v1/chat/completions"
+                             Text="{x:Bind ViewModel.LlmBaseUrl, Mode=TwoWay}" />
+                    <NumberBox
+                        Header="规范化并行数（1-500）"
+                        Minimum="1"
+                        Maximum="500"
+                        SmallChange="1"
+                        Value="{x:Bind ViewModel.LlmParallelism, Mode=TwoWay}"
+                        HorizontalAlignment="Left"
+                        Width="200" />
+                    <NumberBox
+                        Header="每批地点数（20-100）"
+                        Minimum="20"
+                        Maximum="100"
+                        SmallChange="5"
+                        Value="{x:Bind ViewModel.LlmBatchSize, Mode=TwoWay}"
+                        HorizontalAlignment="Left"
+                        Width="200" />
+                    <TextBlock Text="照片会先自动去重成「不同地点名」，再按此并行数与批量分批发给模型；2 万张通常只需几十到几百次请求。失败自动重试，未成功的下次续跑。" Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <!-- 反地理编码 -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE7BA;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="反地理编码" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="经纬度解析数据源与处理并行度" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <ComboBox
+                        Header="解析源"
+                        ItemsSource="{x:Bind ViewModel.GeocodeSourceOptions}"
+                        DisplayMemberPath="Label"
+                        SelectedValuePath="Key"
+                        SelectedValue="{x:Bind ViewModel.GeocodeSource, Mode=TwoWay}"
+                        HorizontalAlignment="Left"
+                        MinWidth="360" />
+                    <TextBox
+                        Header="高德 Web 服务 Key（选高德时必填，仅存本机）"
+                        PlaceholderText="在高德开放平台申请的 Web 服务 Key"
+                        Text="{x:Bind ViewModel.AmapApiKey, Mode=TwoWay}" />
+                    <TextBox
+                        Header="高德安全密钥（可选，用于 sig 数字签名）"
+                        PlaceholderText="Key 开启签名验证时需填写"
+                        Text="{x:Bind ViewModel.AmapApiSecret, Mode=TwoWay}" />
+                    <NumberBox
+                        Header="解析并行数（1-500）"
+                        Minimum="1"
+                        Maximum="500"
+                        SmallChange="1"
+                        Value="{x:Bind ViewModel.GeocodeParallelism, Mode=TwoWay}"
+                        HorizontalAlignment="Left"
+                        Width="200" />
+                </StackPanel>
+            </Border>
+
+            <!-- ExifTool -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE896;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="ExifTool" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="EXIF 编辑依赖的外部命令行工具" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="EXIF 编辑依赖的外部工具。若未安装，可一键从官方源（exiftool.org / SourceForge）下载 Windows 版到本地。" Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.ExifToolStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.DownloadExifToolCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE896;" FontSize="14" />
+                                <TextBlock Text="下载并安装 ExifTool" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelExifToolDownloadCommand}"
+                                Visibility="{x:Bind ViewModel.IsExifToolDownloading, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消下载" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.OpenExifToolDirCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE838;" FontSize="14" />
+                                <TextBlock Text="打开目录" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.ExifToolDownloadProgress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsExifToolDownloading, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.ExifToolProgressText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Data location -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE838;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="数据位置" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="SQLite 索引数据库所在路径" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind DatabasePathText}" Style="{StaticResource CardDescStyle}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Database backup -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE7B8;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="数据库备份" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="备份与恢复 SQLite 索引数据库" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <ToggleSwitch Header="退出应用时自动备份"
+                                  OnContent="开启" OffContent="关闭"
+                                  IsOn="{x:Bind ViewModel.EnableAutoBackup, Mode=TwoWay}" />
+                    <TextBlock Text="备份目录" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{x:Bind ViewModel.BackupDirectory, Mode=OneWay}"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   MaxWidth="380"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button Command="{x:Bind ViewModel.ChooseBackupDirectoryCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE8B7;" FontSize="14" />
+                                <TextBlock Text="选择目录…" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.OpenBackupDirectoryCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE838;" FontSize="14" />
+                                <TextBlock Text="打开目录" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.BackupNowCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsBackingUp, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE7B8;" FontSize="14" />
+                                <TextBlock Text="立即备份" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="RestoreDatabase_OnClick"
+                                IsEnabled="{x:Bind ViewModel.IsBackingUp, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE7A7;" FontSize="14" />
+                                <TextBlock Text="恢复数据库…" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.BackupStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="恢复会用所选备份覆盖当前数据库，操作不可撤销，请先确认。" Style="{StaticResource CardDescStyle}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Database maintenance -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE8E8;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="数据库维护" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="校验数据库完整性，清理缺失记录与孤立缓存" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="校验会检查 SQLite 完整性，并统计冗余数据：文件已被删除但仍残留的照片记录、无对应照片的孤立缩略图缓存、以及孤立的标签/人脸关联。清理仅删除索引记录与应用自己的缓存，不会修改或删除原始照片文件。" Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.VerifyDatabaseCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsDatabaseBusy, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE9D9;" FontSize="14" />
+                                <TextBlock Text="校验数据库" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="CleanupDatabase_OnClick"
+                                IsEnabled="{x:Bind ViewModel.IsDatabaseBusy, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE74D;" FontSize="14" />
+                                <TextBlock Text="清理冗余数据…" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="ResetDatabase_OnClick"
+                                IsEnabled="{x:Bind ViewModel.IsDatabaseBusy, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                                <TextBlock Text="重置数据库…" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <ProgressBar Height="4" IsIndeterminate="True"
+                                 Visibility="{x:Bind ViewModel.IsDatabaseBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.DatabaseProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsDatabaseBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.DatabaseStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <!-- Exit -->
+            <Button Click="Exit_OnClick" HorizontalAlignment="Left" Margin="0,4,0,0">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE7E8;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                    <TextBlock Text="退出应用" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                </StackPanel>
+            </Button>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

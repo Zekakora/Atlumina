@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
+    xmlns:conv="using:MyAlbum_App.Converters">
+
+    <conv:IndentScaleConverter x:Key="IndentScale" />
+
+    <!--
+      Compact TreeViewItem template: keeps the standard hover/selection visuals and
+      expand chevron, but reduces per-depth indentation (via IndentScale) and the
+      chevron gutter so the folder tree hugs the left edge.
+    -->
+    <Style TargetType="controls:TreeViewItem">
+        <Setter Property="IsTabStop" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="GlyphBrush" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Setter Property="ExpandedGlyph" Value="&#xE70D;" />
+        <Setter Property="CollapsedGlyph" Value="&#xE76C;" />
+        <Setter Property="GlyphSize" Value="12" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="controls:TreeViewItem">
+                    <Grid
+                        x:Name="ContentPresenterGrid"
+                        Background="{TemplateBinding Background}"
+                        BorderBrush="{TemplateBinding BorderBrush}"
+                        BorderThickness="{TemplateBinding BorderThickness}"
+                        Margin="0,1"
+                        Padding="2,2"
+                        CornerRadius="{ThemeResource ControlCornerRadius}">
+
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal" />
+                                <VisualState x:Name="PointerOver">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenterGrid.Background" Value="{ThemeResource TreeViewItemBackgroundPointerOver}" />
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource TreeViewItemForegroundPointerOver}" />
+                                        <Setter Target="SelectionIndicator.Opacity" Value="0" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Pressed">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenterGrid.Background" Value="{ThemeResource TreeViewItemBackgroundPressed}" />
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource TreeViewItemForegroundPressed}" />
+                                        <Setter Target="SelectionIndicator.Opacity" Value="0" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Selected">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenterGrid.Background" Value="{ThemeResource TreeViewItemBackgroundSelected}" />
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource TreeViewItemForegroundSelected}" />
+                                        <Setter Target="SelectionIndicator.Fill" Value="{ThemeResource TreeViewItemSelectionIndicatorForeground}" />
+                                        <Setter Target="SelectionIndicator.Opacity" Value="1" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="PointerOverSelected">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenterGrid.Background" Value="{ThemeResource TreeViewItemBackgroundSelectedPointerOver}" />
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource TreeViewItemForegroundSelectedPointerOver}" />
+                                        <Setter Target="SelectionIndicator.Fill" Value="{ThemeResource TreeViewItemSelectionIndicatorForegroundPointerOver}" />
+                                        <Setter Target="SelectionIndicator.Opacity" Value="1" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="PressedSelected">
+                                    <VisualState.Setters>
+                                        <Setter Target="ContentPresenterGrid.Background" Value="{ThemeResource TreeViewItemBackgroundSelectedPressed}" />
+                                        <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource TreeViewItemForegroundSelectedPressed}" />
+                                        <Setter Target="SelectionIndicator.Fill" Value="{ThemeResource TreeViewItemSelectionIndicatorForegroundPressed}" />
+                                        <Setter Target="SelectionIndicator.Opacity" Value="1" />
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+
+                        <Rectangle
+                            x:Name="SelectionIndicator"
+                            Width="3"
+                            Height="16"
+                            Fill="{ThemeResource TreeViewItemSelectionIndicatorForeground}"
+                            Opacity="0"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            RadiusX="2"
+                            RadiusY="2" />
+
+                        <Grid
+                            x:Name="MultiSelectGrid"
+                            Padding="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=TreeViewItemTemplateSettings.Indentation, Converter={StaticResource IndentScale}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+
+                            <Grid
+                                x:Name="ExpandCollapseChevron"
+                                Grid.Column="0"
+                                Padding="6,0"
+                                Width="22"
+                                Opacity="{TemplateBinding GlyphOpacity}"
+                                Background="Transparent">
+                                <TextBlock
+                                    x:Name="CollapsedGlyph"
+                                    Foreground="{TemplateBinding GlyphBrush}"
+                                    Width="12"
+                                    Height="12"
+                                    Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=TreeViewItemTemplateSettings.CollapsedGlyphVisibility}"
+                                    FontSize="{TemplateBinding GlyphSize}"
+                                    Text="{TemplateBinding CollapsedGlyph}"
+                                    FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                    Padding="2"
+                                    VerticalAlignment="Center"
+                                    IsTextScaleFactorEnabled="False"
+                                    IsHitTestVisible="False" />
+                                <TextBlock
+                                    x:Name="ExpandedGlyph"
+                                    Foreground="{TemplateBinding GlyphBrush}"
+                                    Width="12"
+                                    Height="12"
+                                    Visibility="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=TreeViewItemTemplateSettings.ExpandedGlyphVisibility}"
+                                    FontSize="{TemplateBinding GlyphSize}"
+                                    Text="{TemplateBinding ExpandedGlyph}"
+                                    FontFamily="{StaticResource SymbolThemeFontFamily}"
+                                    Padding="2"
+                                    VerticalAlignment="Center"
+                                    IsTextScaleFactorEnabled="False"
+                                    IsHitTestVisible="False" />
+                            </Grid>
+
+                            <ContentPresenter
+                                x:Name="ContentPresenter"
+                                Grid.Column="1"
+                                ContentTransitions="{TemplateBinding ContentTransitions}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Content="{TemplateBinding Content}"
+                                Foreground="{TemplateBinding Foreground}"
+                                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                Margin="{TemplateBinding Padding}" />
+                        </Grid>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

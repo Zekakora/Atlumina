@@ -1,0 +1,38 @@
+## .NET build output (any project level)
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+*.binlog
+
+## IDE / tooling
+.idea/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+_ReSharper*/
+*.DotSettings.user
+
+## NuGet
+*.nupkg
+*.snupkg
+project.lock.json
+
+## MSIX / packaging output
+AppPackages/
+BundleArtifacts/
+*.msix
+*.msixupload
+*.appx
+*.appxbundle
+*.appxupload
+publish/
+
+## Local junk files at repo root
+x.db
+--repair
+
+## Test databases (regenerable, never commit)
+test/**/*.db

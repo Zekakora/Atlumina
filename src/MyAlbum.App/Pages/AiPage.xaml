@@ -1,0 +1,624 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="MyAlbum_App.Pages.AiPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:conv="using:MyAlbum_App.Converters"
+    xmlns:vm="using:MyAlbum_App.ViewModels"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:InvertBoolConverter x:Key="InvertBool" />
+        <conv:BoolToAngleConverter x:Key="BoolToAngle" />
+
+        <!-- Separate small toggle button that collapses only the image display area of a card.
+             Custom template: no accent fill in the checked (expanded) state, only a subtle hover. -->
+        <Style x:Key="CollapseButtonStyle" TargetType="ToggleButton">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="4" />
+            <Setter Property="MinWidth" Value="24" />
+            <Setter Property="MinHeight" Value="24" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Grid x:Name="Root" Background="{TemplateBinding Background}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="Root.Background" Value="Transparent" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                                <!-- Checked (expanded) keeps the transparent background: no accent fill. -->
+                                <VisualStateGroup x:Name="CheckStates">
+                                    <VisualState x:Name="Checked" />
+                                    <VisualState x:Name="Unchecked" />
+                                    <VisualState x:Name="Indeterminate" />
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              Padding="{TemplateBinding Padding}" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+
+    <ScrollViewer>
+        <StackPanel MaxWidth="880" HorizontalAlignment="Left" Margin="32,24,32,32" Spacing="16">
+
+            <!-- Page header -->
+            <StackPanel Spacing="2" Margin="0,0,0,8">
+                <TextBlock Text="AI 功能" Style="{StaticResource TitleTextBlockStyle}" />
+                <TextBlock Text="设备探测、照片质量分析、场景自动打标与人脸分组。" Style="{StaticResource CardDescStyle}" />
+            </StackPanel>
+
+            <!-- Device / model status -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE950;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="计算环境" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="DirectML 推理设备与已安装模型" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.DeviceText, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.DeviceDetail, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.ModelsText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Analysis (pHash + sharpness) -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE943;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="照片质量分析" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="pHash 相似分组 + 拉普拉斯清晰度评估" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="pHash 感知哈希用于相似照片分组；拉普拉斯方差衡量边缘锐度，分数越低越可能模糊。两项均在后台计算并写入索引，重复分析会自动跳过。ONNX 模型（如 MobileNetV4 / NIMA）放入 models 目录后可启用 NPU/GPU 深度推理。" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.AnalyzeCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE943;" FontSize="14" />
+                                <TextBlock Text="开始分析（pHash + 清晰度）" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelCommand}"
+                                Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="{x:Bind ViewModel.AnalyzedText, Mode=OneWay}" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.Progress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                </StackPanel>
+            </Border>
+
+            <!-- Deep analysis (color / aesthetic / embedding / objects) -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE8F4;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="照片评分与内容识别" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="NIMA 美学评分（识别无意义照片）+ 主色调/黑白 + YOLO 物体检测" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="NIMA 对每张照片给出 1-10 美学分，低分照片多为构图空洞、过曝欠曝或纯色误拍；同时提取主色调、标记黑白照片，并用 YOLO 检测照片中的人/动物/车等物体。识别出的物体自动作为 AI 标签写入，可在主页左栏筛选。" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.DeepAnalyzeCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsDeepAnalyzing, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE943;" FontSize="14" />
+                                <TextBlock Text="开始深度分析" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelDeepCommand}"
+                                Visibility="{x:Bind ViewModel.IsDeepAnalyzing, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="{x:Bind ViewModel.DeepAnalyzedText, Mode=OneWay}" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.DeepProgress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsDeepAnalyzing, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.DeepProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsDeepAnalyzing, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.DeepStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                </StackPanel>
+            </Border>
+
+            <!-- GPS 位置回填 + LLM 地址规范化 -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE707;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="位置信息" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="为 GPS 照片解析拍摄地，再用大语言模型规范为五级地址" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="① 解析：按「设置 → 位置来源」选择 高德（国内，需 API Key）或 OpenStreetMap（国外），解析失败会自动切换到另一个来源；每张照片记录解析来源（高德/OSM/邻近复用）。② 邻近复用：500 米内有已解析照片时直接复用其位置、不耗流量；复用结果不会再被当作锚点，避免一路走一路停最后全解析到同一地址。③ 增量：已解析的照片不再覆盖，失败的照片标记来源，切换来源后只重试未成功且未试过当前来源的照片。④ 规范：用「设置 → 大语言模型」的模型把 GpsPlace 规范化为 国家-省-市-区县-地标 五级结构，供主页「地点」标签与右栏「拍摄地址」使用。" Style="{StaticResource CardDescStyle}" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.BackfillPlacesCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsPlaceBackfilling, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE896;" FontSize="14" />
+                                <TextBlock Text="增量解析 GPS 照片位置" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelPlaceCommand}"
+                                Visibility="{x:Bind ViewModel.IsPlaceBackfilling, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.ResetPlacesCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsResettingPlaces, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                                ToolTipService.ToolTip="清空全部已解析位置与规范地址（保留原始 GPS），之后可重新解析">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE777;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                                <TextBlock Text="重置位置信息" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.PlaceCoverageText, Mode=OneWay}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.PlaceProgress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsPlaceBackfilling, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.PlaceProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsPlaceBackfilling, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.PlaceStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.NormalizeAddressesCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsNormalizingAddresses, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE943;" FontSize="14" />
+                                <TextBlock Text="规范地址（LLM）" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelNormalizeCommand}"
+                                Visibility="{x:Bind ViewModel.IsNormalizingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="{x:Bind ViewModel.AddressCoverageText, Mode=OneWay}" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.NormalizeProgress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsNormalizingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.NormalizeProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsNormalizingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.NormalizeStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <Button Click="ShowSkipped_OnClick"
+                            Visibility="{x:Bind ViewModel.HasSkippedAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE8B2;" FontSize="14" />
+                            <TextBlock Text="查看被跳过的照片" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+
+            <!-- Semantic search (MobileCLIP) -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Border Style="{StaticResource CardIconBoxStyle}">
+                            <FontIcon Glyph="&#xE721;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                        </Border>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="语义搜图" Style="{StaticResource CardTitleStyle}" />
+                            <TextBlock Text="MobileCLIP · 用自然语言描述找照片" Style="{StaticResource CardDescStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock Text="输入「海边的狗」「红色跑车」「雪景」等自然语言描述，按照片内容相似度返回结果（中英文均可，中文为近似分词）。模型约 400MB，首次使用需联网下载。" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.DownloadClipCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                                Visibility="{x:Bind ViewModel.IsClipInstalled, Mode=OneWay, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE896;" FontSize="14" />
+                                <TextBlock Text="下载 MobileCLIP 模型（约 400MB）" />
+                            </StackPanel>
+                        </Button>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.IsClipInstalled, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                            <TextBlock Text="MobileCLIP 已安装" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <AutoSuggestBox x:Name="SearchQueryBox" Width="360" PlaceholderText="描述照片，如：海边的狗 / red car / 雪景"
+                                        QueryIcon="Find"
+                                        QuerySubmitted="SearchBox_OnQuerySubmitted"
+                                        IsEnabled="{x:Bind ViewModel.IsClipInstalled, Mode=OneWay}" />
+                        <Button Command="{x:Bind ViewModel.SearchCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsSearching, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE721;" FontSize="14" />
+                                <TextBlock Text="搜索" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="{x:Bind ViewModel.SearchStatusText, Mode=OneWay}" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <ItemsControl ItemsSource="{x:Bind ViewModel.SearchResults, Mode=OneWay}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" MaximumRowsOrColumns="6" ItemWidth="120" ItemHeight="150" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AiPhotoItem">
+                                <Grid Margin="4" RowSpacing="2">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="120" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.Row="0" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                        <Image Source="{x:Bind Thumbnail}" Stretch="UniformToFill" />
+                                    </Border>
+                                    <TextBlock Grid.Row="1" Text="{x:Bind FileName}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Grid.Row="2" Text="{x:Bind BlurText}" FontSize="11"
+                                               Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- Scene auto-tagging -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <!-- Header: icon + title + desc, with a separate collapse button on the right -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Border Style="{StaticResource CardIconBoxStyle}">
+                                <FontIcon Glyph="&#xE8EC;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Border>
+                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                <TextBlock Text="场景自动打标" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="MobileNet V2 · 场景 / 物体识别" Style="{StaticResource CardDescStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <ToggleButton Grid.Column="1" IsChecked="{x:Bind ViewModel.IsSceneExpanded, Mode=TwoWay}"
+                                      Style="{StaticResource CollapseButtonStyle}"
+                                      ToolTipService.ToolTip="展开 / 收起图片展示">
+                            <FontIcon Glyph="&#xE70D;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                      RenderTransformOrigin="0.5,0.5">
+                                <FontIcon.RenderTransform>
+                                    <RotateTransform Angle="{x:Bind ViewModel.IsSceneExpanded, Mode=OneWay, Converter={StaticResource BoolToAngle}}" />
+                                </FontIcon.RenderTransform>
+                            </FontIcon>
+                        </ToggleButton>
+                    </Grid>
+                    <TextBlock Text="自动识别照片中的场景/物体（如街道、山水、人像、动物），生成 AI 标签，可在主页左栏按标签筛选。模型约 14MB，首次下载需联网（支持系统代理）。" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.DownloadModelCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsDownloading, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                                Visibility="{x:Bind ViewModel.IsModelInstalled, Mode=OneWay, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE896;" FontSize="14" />
+                                <TextBlock Text="下载 MobileNet 模型" />
+                            </StackPanel>
+                        </Button>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.IsModelInstalled, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                            <TextBlock Text="MobileNet 已安装" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                        </StackPanel>
+                        <Button Command="{x:Bind ViewModel.TagCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsTagging, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE943;" FontSize="14" />
+                                <TextBlock Text="开始自动打标" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelTagCommand}"
+                                Visibility="{x:Bind ViewModel.IsTagging, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="ClearAiTags_OnClick" VerticalAlignment="Center"
+                                IsEnabled="{x:Bind ViewModel.IsClearingAiTags, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                                ToolTipService.ToolTip="删除全部 AI 场景/物体标签，之后可重新打标">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE74D;" FontSize="14" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                                <TextBlock Text="删除所有 AI 标记" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.TagProgressText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.TagStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <!-- Image display area (collapsible only) -->
+                    <StackPanel Spacing="12"
+                                Visibility="{x:Bind ViewModel.IsSceneExpanded, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="完成自动打标后，此处显示带场景标签的照片。" Style="{StaticResource CardDescStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Face detection & clustering -->
+            <Border Style="{StaticResource MaterialCardStyle}">
+                <StackPanel Spacing="12">
+                    <!-- Header: icon + title + desc, with a separate collapse button on the right -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Border Style="{StaticResource CardIconBoxStyle}">
+                                <FontIcon Glyph="&#xE8D2;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Border>
+                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                <TextBlock Text="人物识别" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="YuNet 检测 + ArcFace 特征聚类" Style="{StaticResource CardDescStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <ToggleButton Grid.Column="1" IsChecked="{x:Bind ViewModel.IsFaceExpanded, Mode=TwoWay}"
+                                      Style="{StaticResource CollapseButtonStyle}"
+                                      ToolTipService.ToolTip="展开 / 收起图片展示">
+                            <FontIcon Glyph="&#xE70D;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                      RenderTransformOrigin="0.5,0.5">
+                                <FontIcon.RenderTransform>
+                                    <RotateTransform Angle="{x:Bind ViewModel.IsFaceExpanded, Mode=OneWay, Converter={StaticResource BoolToAngle}}" />
+                                </FontIcon.RenderTransform>
+                            </FontIcon>
+                        </ToggleButton>
+                    </Grid>
+                    <TextBlock Text="检测照片中的每张人脸，提取 512 维特征并聚类成不同人物（同一人归为一组），可用于生成人物相册。需 YuNet（检测）+ ArcFace（识别）模型，共约 64MB，放入 models 目录后自动启用。" Style="{StaticResource CardDescStyle}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Command="{x:Bind ViewModel.DownloadFaceModelsCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsDownloadingFaceModels, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                                Visibility="{x:Bind ViewModel.IsFaceModelInstalled, Mode=OneWay, Converter={StaticResource BoolToVis}, ConverterParameter=Invert}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE896;" FontSize="14" />
+                                <TextBlock Text="下载人脸模型（YuNet + ArcFace）" />
+                            </StackPanel>
+                        </Button>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.IsFaceModelInstalled, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <FontIcon Glyph="&#xE73E;" FontSize="14" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                            <TextBlock Text="人脸模型已安装" Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                        </StackPanel>
+                        <Button Command="{x:Bind ViewModel.AnalyzeFacesCommand}"
+                                IsEnabled="{x:Bind ViewModel.IsFaceAnalyzing, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE8D2;" FontSize="14" />
+                                <TextBlock Text="开始人脸分析" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.CancelFacesCommand}"
+                                Visibility="{x:Bind ViewModel.IsFaceAnalyzing, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE711;" FontSize="14" />
+                                <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <TextBlock Text="{x:Bind ViewModel.PersonGroupCountText, Mode=OneWay}" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                    <TextBlock Text="{x:Bind ViewModel.FaceProgressText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <TextBlock Text="{x:Bind ViewModel.FaceStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <!-- Image display area (collapsible only) -->
+                    <StackPanel Spacing="12"
+                                Visibility="{x:Bind ViewModel.IsFaceExpanded, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="完成人脸分析后，此处显示人物分组及代表照片。" Style="{StaticResource CardDescStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Blurry photos -->
+            <Border Style="{StaticResource MaterialCardStyle}"
+                    Visibility="{x:Bind ViewModel.HasResults, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                <StackPanel Spacing="12">
+                    <!-- Header: icon + title + count, with a separate collapse button on the right -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Border Style="{StaticResource CardIconBoxStyle}">
+                                <FontIcon Glyph="&#xE8A5;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Border>
+                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                <TextBlock Text="模糊照片" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.BlurryCountText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <ToggleButton Grid.Column="1" IsChecked="{x:Bind ViewModel.IsBlurryExpanded, Mode=TwoWay}"
+                                      Style="{StaticResource CollapseButtonStyle}"
+                                      ToolTipService.ToolTip="展开 / 收起图片展示">
+                            <FontIcon Glyph="&#xE70D;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                      RenderTransformOrigin="0.5,0.5">
+                                <FontIcon.RenderTransform>
+                                    <RotateTransform Angle="{x:Bind ViewModel.IsBlurryExpanded, Mode=OneWay, Converter={StaticResource BoolToAngle}}" />
+                                </FontIcon.RenderTransform>
+                            </FontIcon>
+                        </ToggleButton>
+                    </Grid>
+                    <!-- Image display area (collapsible only) -->
+                    <StackPanel Spacing="12"
+                                Visibility="{x:Bind ViewModel.IsBlurryExpanded, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.BlurryPhotos, Mode=OneWay}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <ItemsWrapGrid Orientation="Horizontal" MaximumRowsOrColumns="5" ItemWidth="120" ItemHeight="150" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:AiPhotoItem">
+                                    <Grid Margin="4" RowSpacing="2">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="120" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Border Grid.Row="0" CornerRadius="8" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                            <Image Source="{x:Bind Thumbnail}" Stretch="UniformToFill" />
+                                        </Border>
+                                        <TextBlock Grid.Row="1" Text="{x:Bind FileName}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Row="2" Text="{x:Bind BlurText}" FontSize="11"
+                                                   Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Similar groups -->
+            <Border Style="{StaticResource MaterialCardStyle}"
+                    Visibility="{x:Bind ViewModel.HasResults, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                <StackPanel Spacing="12">
+                    <!-- Header: icon + title + count, with a separate collapse button on the right -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Border Style="{StaticResource CardIconBoxStyle}">
+                                <FontIcon Glyph="&#xE8EC;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                            </Border>
+                            <StackPanel Spacing="2" VerticalAlignment="Center">
+                                <TextBlock Text="相似照片" Style="{StaticResource CardTitleStyle}" />
+                                <TextBlock Text="{x:Bind ViewModel.SimilarGroupCountText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                        <ToggleButton Grid.Column="1" IsChecked="{x:Bind ViewModel.IsSimilarExpanded, Mode=TwoWay}"
+                                      Style="{StaticResource CollapseButtonStyle}"
+                                      ToolTipService.ToolTip="展开 / 收起图片展示">
+                            <FontIcon Glyph="&#xE70D;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                      RenderTransformOrigin="0.5,0.5">
+                                <FontIcon.RenderTransform>
+                                    <RotateTransform Angle="{x:Bind ViewModel.IsSimilarExpanded, Mode=OneWay, Converter={StaticResource BoolToAngle}}" />
+                                </FontIcon.RenderTransform>
+                            </FontIcon>
+                        </ToggleButton>
+                    </Grid>
+                    <!-- Image display area (collapsible only) -->
+                    <StackPanel Spacing="12"
+                                Visibility="{x:Bind ViewModel.IsSimilarExpanded, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.SimilarGroups, Mode=OneWay}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:AiSimilarGroup">
+                                    <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                            CornerRadius="8" Padding="12" Margin="0,0,0,8">
+                                        <StackPanel Spacing="8">
+                                            <StackPanel Orientation="Horizontal" Spacing="10">
+                                                <Border Width="30" Height="30" CornerRadius="8" VerticalAlignment="Center"
+                                                        Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                                                    <FontIcon Glyph="&#xE8EC;" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                                </Border>
+                                                <StackPanel Spacing="1" VerticalAlignment="Center">
+                                                    <TextBlock Text="{x:Bind Title}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                                    <TextBlock Text="{x:Bind Detail}" Style="{StaticResource CardDescStyle}" />
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <ItemsControl ItemsSource="{x:Bind Photos}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <ItemsWrapGrid Orientation="Horizontal" ItemWidth="90" ItemHeight="120" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:AiPhotoItem">
+                                                        <Grid Margin="3" RowSpacing="2">
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="90" />
+                                                                <RowDefinition Height="Auto" />
+                                                            </Grid.RowDefinitions>
+                                                            <Border Grid.Row="0" CornerRadius="6" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                                                <Image Source="{x:Bind Thumbnail}" Stretch="UniformToFill" />
+                                                            </Border>
+                                                            <TextBlock Grid.Row="1" Text="{x:Bind FileName}" FontSize="10" TextTrimming="CharacterEllipsis" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

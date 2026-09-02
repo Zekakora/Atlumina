@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="MyAlbum_App.Controls.ProtectionBanner"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+      Custom warning banner (replaces InfoBar): WinUI 3's InfoBar keeps its text dark in
+      dark mode on some SDK builds. This banner uses theme resources directly so the text
+      is always readable (white in dark, black in light).
+    -->
+    <Border
+        x:Name="Banner"
+        Visibility="Collapsed"
+        Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+        BorderBrush="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+        BorderThickness="1"
+        CornerRadius="8"
+        Margin="8,8,8,0"
+        Padding="12,10">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+            <FontIcon
+                Glyph="&#xE7BA;"
+                FontSize="16"
+                VerticalAlignment="Top"
+                Margin="0,1,0,0"
+                Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            <StackPanel Spacing="3">
+                <TextBlock
+                    Text="原始照片数据保护已开启"
+                    FontWeight="SemiBold"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                <TextBlock
+                    Text="已禁止修改、删除或重命名原始照片文件（EXIF 编辑 / GPS 写回 / 时间戳修复 / 去重与格式清理删除 / 批量重命名）。可在「设置」中关闭。"
+                    FontSize="12"
+                    TextWrapping="Wrap"
+                    Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

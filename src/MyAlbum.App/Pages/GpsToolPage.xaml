@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="MyAlbum_App.Pages.GpsToolPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:conv="using:MyAlbum_App.Converters"
+    xmlns:vm="using:MyAlbum_App.ViewModels"
+    xmlns:controls="using:MyAlbum_App.Controls"
+    mc:Ignorable="d">
+
+    <Page.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <conv:InvertBoolConverter x:Key="InvertBool" />
+        <DataTemplate x:Key="GpsGroupTemplate" x:DataType="vm:GpsToolGroupItem">
+            <Border
+                Padding="12"
+                CornerRadius="8"
+                Margin="0,0,0,10"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{x:Bind Title}" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock Text="{x:Bind Summary}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <ItemsControl ItemsSource="{x:Bind Photos}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:GpsToolPhotoItem">
+                                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Padding="0,3">
+                                    <CheckBox IsChecked="{x:Bind IsSelected, Mode=TwoWay}" VerticalAlignment="Center" MinWidth="0" />
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="0" DoubleTapped="PhotoRow_OnDoubleTapped">
+                                        <TextBlock Text="{x:Bind File}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock
+                                            Text="{x:Bind TargetText, Mode=OneWay}"
+                                            FontSize="10"
+                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                            TextTrimming="CharacterEllipsis"
+                                            ToolTipService.ToolTip="双击打开全屏查看" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2" Text="{x:Bind TimeText}" FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Padding="20,16" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <controls:ProtectionBanner Grid.Row="0" />
+
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" ColumnSpacing="12">
+            <StackPanel Spacing="4">
+                <TextBlock Text="GPS 补全工具" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock
+                    Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+                    FontSize="12"
+                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+
+            <!-- 右上角：扫描时间范围（仅扫描所选日期内的照片，避免全库卡顿） -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                <TextBlock Text="时间范围" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <CalendarDatePicker
+                    Date="{x:Bind ViewModel.DateFrom, Mode=TwoWay}"
+                    PlaceholderText="开始"
+                    MinWidth="130"
+                    VerticalAlignment="Center"
+                    ToolTipService.ToolTip="仅扫描该日期及之后的照片" />
+                <TextBlock Text="—" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <CalendarDatePicker
+                    Date="{x:Bind ViewModel.DateTo, Mode=TwoWay}"
+                    PlaceholderText="结束"
+                    MinWidth="130"
+                    VerticalAlignment="Center"
+                    ToolTipService.ToolTip="仅扫描该日期及之前的照片" />
+                <Button Command="{x:Bind ViewModel.ClearDateRangeCommand}" Padding="8,4" VerticalAlignment="Center">
+                    <TextBlock Text="全部" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <ScrollViewer Grid.Row="2" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button
+                    Command="{x:Bind ViewModel.ScanCommand}"
+                    IsEnabled="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource InvertBool}}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE721;" FontSize="14" />
+                        <TextBlock Text="扫描" />
+                    </StackPanel>
+                </Button>
+                <ComboBox
+                    x:Name="ThresholdCombo"
+                    ItemsSource="{x:Bind ViewModel.Thresholds}"
+                    DisplayMemberPath="Label"
+                    SelectedIndex="0"
+                    SelectionChanged="Threshold_OnSelectionChanged"
+                    MinWidth="120"
+                    ToolTipService.ToolTip="链式归类的最大时间间隔：照片距最近有 GPS 锚点超过该间隔时视为需手动设置" />
+                <Button Command="{x:Bind ViewModel.SelectAutoClassifiableCommand}" Content="自动选中可归类" />
+                <Button Command="{x:Bind ViewModel.SelectNeedsReviewCommand}" Content="选中需复核" />
+                <Button Command="{x:Bind ViewModel.ClearSelectionCommand}" Content="清除选择" />
+                <Button
+                    Command="{x:Bind ViewModel.WriteBackCommand}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE70F;" FontSize="14" />
+                        <TextBlock Text="提交并写回 GPS" />
+                    </StackPanel>
+                </Button>
+                <Button
+                    Command="{x:Bind ViewModel.WriteDbToFilesCommand}"
+                    ToolTipService.ToolTip="把数据库索引里已有的 GPS 写回原始照片文件（用于之前未装 ExifTool 时 GPS 只写进了数据库的情况）">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE896;" FontSize="14" />
+                        <TextBlock Text="库内GPS→源文件" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="3" ColumnDefinitions="1.15*,*" ColumnSpacing="12">
+            <!-- Map: green anchors + draggable red pin for the selection -->
+            <Border
+                Grid.Column="0"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="6">
+                <Grid>
+                    <WebView2
+                        x:Name="GpsMapView"
+                        DefaultBackgroundColor="Transparent" />
+                    <ProgressRing
+                        Width="48"
+                        Height="48"
+                        IsActive="{x:Bind ViewModel.IsBusy, Mode=OneWay}"
+                        Visibility="{x:Bind ViewModel.IsBusy, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center" />
+                </Grid>
+            </Border>
+
+            <!-- Grouped photos list -->
+            <Border
+                Grid.Column="1"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="10,8">
+                <ListView
+                    ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}"
+                    ItemTemplate="{StaticResource GpsGroupTemplate}"
+                    SelectionMode="None" />
+            </Border>
+        </Grid>
+
+        <TextBlock
+            Grid.Row="4"
+            FontSize="12"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            TextWrapping="Wrap"
+            Text="① 点「自动选中可归类」勾选能自动定位的照片（文件名下方提示将归类到哪个编号锚点；双击文件名可全屏查看）　② 也可手动：点编号绿锚点＝选中照片套用其 GPS；点空白/拖动红图钉＝放到该位置　③ 确认后点「提交并写回 GPS」按最近锚点归类并写入索引/源文件。" />
+    </Grid>
+</Page>

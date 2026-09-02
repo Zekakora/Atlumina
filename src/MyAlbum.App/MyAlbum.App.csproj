@@ -1,0 +1,116 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>MyAlbum_App</RootNamespace>
+    <AssemblyTitle>Atlumina</AssemblyTitle>
+    <Product>Atlumina</Product>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
+    <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsPackageType>None</WindowsPackageType>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\SplashScreen.scale-200.png" />
+    <Content Include="Assets\LockScreenLogo.scale-200.png" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-48_altform-lightunplated.png" />
+    <Content Include="Assets\StoreLogo.png" />
+    <Content Include="Assets\AppIcon.ico" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Content Include="Assets\Map\map.html" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Map\leaflet.js" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Map\leaflet.css" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Map\supercluster.min.js" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!--
+    Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
+    Tools extension to be activated for this project even if the Windows App SDK Nuget
+    package has not yet been restored.
+  -->
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+
+  <!--
+    Microsoft.Windows.SDK.BuildTools.WinApp adds first-class support for
+    `dotnet run` on packaged WinUI apps: it hooks the .NET CLI Run target to
+    register a debug identity via the winapp CLI and launch the app with
+    package identity (AUMID).
+    Set <EnableWinAppRunSupport>false</EnableWinAppRunSupport> in a
+    <PropertyGroup> above to opt out.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2526" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.3.1" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.5.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MyAlbum.Core\MyAlbum.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Defining the "HasPackageAndPublishMenuAddedByProject" property here allows the Solution
+    Explorer "Package and Publish" context menu entry to be enabled for this project even if
+    the Windows App SDK Nuget package has not yet been restored.
+  -->
+  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
+    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+  </PropertyGroup>
+
+  <!-- Publish Properties -->
+  <PropertyGroup>
+    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
+    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
+    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
+    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">False</PublishTrimmed>
+  </PropertyGroup>
+
+  <!--
+    WinUI 3 unpackaged publish 已知坑：XAML 编译器生成的 .xbf / MyAlbum.App.pri 直接落在
+    $(OutputPath)，不在 Content 项里，dotnet publish 不会收集 → 发布输出缺 XBF/PRI →
+    运行时 LoadComponent 抛 XamlParseException（安装后无法启动），并导致
+    ms-appx:/// 资源（themeresources.xaml 等）解析失败。Assets 的 Content 项未设
+    CopyToOutputDirectory 同样不进 publish → 桌面/开始菜单缺 AppIcon.ico。
+    此处改为 publish 结束后把输出目录里的 .xbf / .pri / Assets 原样拷进 $(PublishDir)。
+    注意：不要用 ResolvedFileToPublish 追加，会与管线既有收集冲突（NETSDK1152）。
+  -->
+  <Target Name="CopyWinUIXbfToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_WinUiXbfToPublish Include="$(OutputPath)**\*.xbf" />
+      <_WinUiPriToPublish Include="$(OutputPath)**\*.pri" />
+      <_WinUiAssetsToPublish Include="$(OutputPath)Assets\**\*.*" />
+    </ItemGroup>
+    <Copy
+        SourceFiles="@(_WinUiXbfToPublish)"
+        DestinationFiles="@(_WinUiXbfToPublish->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+        SkipUnchangedFiles="true" />
+    <Copy
+        SourceFiles="@(_WinUiPriToPublish)"
+        DestinationFiles="@(_WinUiPriToPublish->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+        SkipUnchangedFiles="true" />
+    <Copy
+        SourceFiles="@(_WinUiAssetsToPublish)"
+        DestinationFiles="@(_WinUiAssetsToPublish->'$(PublishDir)Assets\%(RecursiveDir)%(Filename)%(Extension)')"
+        SkipUnchangedFiles="true" />
+  </Target>
+</Project>
