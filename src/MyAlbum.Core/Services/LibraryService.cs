@@ -50,7 +50,17 @@ public sealed class LibraryService
     {
         try
         {
+            // Reuse the stored path casing so a watcher event with different casing (Windows
+            // is case-insensitive) updates the existing row instead of inserting a duplicate.
+var existing = await _db.GetPhotoByPathAsync(filePath);
             var photo = _reader.Read(filePath);
+            if (existing is not null)
+            {
+                photo.Id = existing.Id;
+                photo.FilePath = existing.FilePath;
+                photo.ThumbnailCachePath = existing.ThumbnailCachePath;
+                photo.Rating = existing.Rating;
+            }
             photo.ThumbnailCachePath = await _thumbs.GetOrCreateThumbnailAsync(photo);
             await _db.UpsertPhotoAsync(photo);
             return true;
@@ -77,6 +87,16 @@ public sealed class LibraryService
                 photo.Id = existing.Id;
                 photo.ThumbnailCachePath = existing.ThumbnailCachePath;
                 photo.Rating = existing.Rating;
+                // Place data is derived from GPS via reverse-geocoding and is NOT stored in the
+                // file's EXIF — preserve the existing resolution across a metadata refresh.
+                photo.GpsPlace = existing.GpsPlace;
+                photo.GpsPlaceSource = existing.GpsPlaceSource;
+                photo.GpsPlaceFailed = existing.GpsPlaceFailed;
+                photo.PlaceCountry = existing.PlaceCountry;
+                photo.PlaceProvince = existing.PlaceProvince;
+                photo.PlaceCity = existing.PlaceCity;
+                photo.PlaceDistrict = existing.PlaceDistrict;
+                photo.PlaceLandmark = existing.PlaceLandmark;
             }
             await _db.UpsertPhotoAsync(photo);
             return photo;
@@ -108,16 +128,66 @@ public sealed class LibraryService
         // Load the previous index rows for this folder (incl. subfolders) as full records so a
         // re-scan can (a) skip unchanged files cheaply and (b) preserve user-owned / derived
         // fields (rating, GPS place, AI analysis) when a file DID change.
-        var existing = (await _db.GetPhotosByDirectoryPrefixAsync(folder))
-            .ToDictionary(p => p.FilePath, StringComparer.OrdinalIgnoreCase);
+        // Case-insensitive dedupe: Windows paths are case-insensitive but the FilePath UNIQUE
+        // column is BINARY, so a file rewritten/renamed with a different case can leave two rows
+        // for one physical file — which previously crashed the scan at ToDictionary and surfaced
+        // as "失败 1" on every refresh. Keep the freshest row (size/time matches disk, else the
+        // newest IndexedAtUtc) and delete the stale duplicates so the grid stops double-counting.
+        var existing = new Dictionary<string, PhotoRecord>(StringComparer.OrdinalIgnoreCase);
+        var staleDupes = new List<(string Path, string? Thumb)>();
+        foreach (var row in await _db.GetPhotosByDirectoryPrefixAsync(folder))
+        {
+            if (existing.TryGetValue(row.FilePath, out var cur))
+            {
+                bool rowFresher = IsFresher(row, cur);
+                var keep = rowFresher ? row : cur;
+                var drop = rowFresher ? cur : row;
+                existing[row.FilePath] = keep;
+                staleDupes.Add((drop.FilePath, drop.ThumbnailCachePath));
+            }
+            else
+            {
+                existing[row.FilePath] = row;
+            }
+        }
+        if (staleDupes.Count > 0)
+        {
+            result.RemovedDuplicates = await _db.DeleteMissingPhotosAsync(staleDupes.Select(d => d.Path).ToList());
+            foreach (var (_, thumb) in staleDupes)
+            {
+                TryDeleteThumb(thumb);
+            }
+        }
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var counters = new ScanCounters();
         var pending = new ConcurrentBag<PhotoRecord>();
         var throttled = progress is null ? null : new ThrottledProgress(progress, TimeSpan.FromMilliseconds(100));
 
         // Enumerate on a thread-pool thread: AllDirectories walk + sort of tens of
-        // thousands of files must never block the UI thread.
-        var files = await Task.Run(() => EnumerateImages(folder).ToList(), ct);
+        // thousands of files must never block the UI thread. A deleted folder or a transient
+        // IO error must NOT abort the whole scan — a folder that is gone yields an empty list
+        // and every previously indexed row is flagged missing below; a transient failure falls
+        // back to probing each row individually so only files that are really gone get flagged.
+        bool enumerationFailed = false;
+        List<string> files;
+        try
+        {
+            files = await Task.Run(() => EnumerateImages(folder).ToList(), ct);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // The folder itself or a sub-folder disappeared during the walk. When the root
+            // folder is gone, every indexed row below it is missing (empty list → all flagged);
+            // when the root still exists (a sub-folder was deleted mid-walk), fall back to
+            // probing each row so files that are still on disk are NOT falsely flagged.
+            files = new List<string>();
+            enumerationFailed = Directory.Exists(folder);
+        }
+        catch (IOException)
+        {
+            files = new List<string>();
+            enumerationFailed = true;
+        }
         result.TotalFiles = files.Count;
 
         // sharedConcurrency 由调用方传入时，跨多个文件夹共享同一把信号量，从而把
@@ -168,6 +238,7 @@ public sealed class LibraryService
                             // file-derived metadata and the thumbnail are refreshed.
                             if (existing.TryGetValue(file, out var old))
                             {
+                                photo.FilePath = old.FilePath;
                                 photo.Id = old.Id;
                                 photo.Rating = old.Rating;
                                 photo.Tags = old.Tags;
@@ -195,9 +266,10 @@ public sealed class LibraryService
                             Interlocked.Increment(ref counters.Indexed);
                         }
                     }
-                    catch
+                    catch (Exception ex)
                     {
                         Interlocked.Increment(ref counters.Failed);
+                        counters.FailedDetails.Add($"{Path.GetFileName(file)}：{ex.Message}");
                     }
 
                     throttled?.Report(new ScanProgress
@@ -233,12 +305,22 @@ public sealed class LibraryService
         result.Indexed = counters.Indexed;
         result.Skipped = counters.Skipped;
         result.Failed = counters.Failed;
-
-        // Files that disappeared since the last scan.
-        foreach (var path in existing.Keys.Where(p => !seen.ContainsKey(p)))
+        foreach (var detail in counters.FailedDetails)
         {
-            await _db.MarkMissingAsync(path, true);
-            result.MarkedMissing++;
+            result.FailedDetails.Add(detail);
+        }
+
+        // Files that disappeared since the last scan. When enumeration succeeded, anything in
+        // the index but not on disk is gone. When it failed transiently (not because the whole
+        // folder vanished) probe each stale row so only files that really no longer exist are
+        // flagged. Batched into one transaction per scan for large deletions (whole folders).
+        List<string> gone = enumerationFailed
+            ? existing.Keys.Where(p => !File.Exists(p)).ToList()
+            : existing.Keys.Where(p => !seen.ContainsKey(p)).ToList();
+        if (gone.Count > 0)
+        {
+            await _db.MarkMissingBatchAsync(gone, true);
+            result.MarkedMissing = gone.Count;
         }
 
         await _db.UpsertFolderAsync(new FolderRecord
@@ -325,6 +407,51 @@ public sealed class LibraryService
         public int Indexed;
         public int Skipped;
         public int Failed;
+        public readonly System.Collections.Concurrent.ConcurrentBag<string> FailedDetails = new();
+    }
+
+    /// <summary>True when <paramref name="a"/> is the better row to keep among two rows pointing
+    /// at the same physical file (case-insensitive duplicate): a row whose size/time matches the
+    /// file on disk wins, otherwise the most recently indexed row.</summary>
+    private static bool IsFresher(PhotoRecord a, PhotoRecord b)
+    {
+        bool aMatches = FingerprintMatchesDisk(a);
+        bool bMatches = FingerprintMatchesDisk(b);
+        if (aMatches != bMatches)
+        {
+            return aMatches;
+        }
+        return (a.IndexedAtUtc) >= (b.IndexedAtUtc);
+    }
+
+    private static bool FingerprintMatchesDisk(PhotoRecord p)
+    {
+        try
+        {
+            var fi = new FileInfo(p.FilePath);
+            return fi.Exists
+                && p.FileSizeBytes == fi.Length
+                && Math.Abs((p.FileModifiedUtc - fi.LastWriteTimeUtc).TotalSeconds) < 2;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteThumb(string? thumb)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(thumb) && File.Exists(thumb))
+            {
+                File.Delete(thumb);
+            }
+        }
+        catch
+        {
+            // cache cleanup is best-effort
+        }
     }
 
     /// <summary>

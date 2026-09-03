@@ -1110,7 +1110,7 @@ static async Task<int> RunMaintenanceTestAsync(PhotoDatabase db)
     Console.WriteLine("--- 清理 ---");
     var result = await maintenance.CleanupAsync(progress);
     sw.Stop();
-    Console.WriteLine($"清理完成 ({sw.ElapsedMilliseconds}ms): 缺失 {result.RemovedMissingPhotos}，孤立缩略图 {result.RemovedOrphanThumbnails}，标签 {result.RemovedOrphanPhotoTags}，人脸 {result.RemovedOrphanFaces}");
+    Console.WriteLine($"清理完成 ({sw.ElapsedMilliseconds}ms): 缺失 {result.RemovedMissingPhotos}，重复 {result.RemovedCaseDuplicates}，孤立缩略图 {result.RemovedOrphanThumbnails}，标签 {result.RemovedOrphanPhotoTags}，人脸 {result.RemovedOrphanFaces}");
     return 0;
 }
 

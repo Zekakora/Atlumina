@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MyAlbum.Core.Services;
 
@@ -26,17 +27,18 @@ public sealed class ReverseGeocodeService
     public sealed record GeocodeResult(string? Place, string? Source);
 
     /// <summary>
-    /// Resolves <paramref name="lat"/>/<paramref name="lon"/> to a place-name chain. Tries the
-    /// configured source first, then automatically falls back to the other source if the first
-    /// fails (e.g. 高德 fails for overseas addresses → OSM; OSM offline → 高德). The returned
-    /// <see cref="GeocodeResult.Source"/> records which source succeeded so the caller can mark
-    /// the photo accordingly.
+    /// Resolves <paramref name="lat"/>/<paramref name="lon"/> to a place-name chain. Picks the
+    /// primary source by location — 高德 (Amap) for mainland-China coordinates, OSM Nominatim
+    /// for overseas — then automatically falls back to the other source if the first fails
+    /// (e.g. 高德 fails for overseas addresses → OSM; OSM rate-limited/offline → 高德). The
+    /// returned <see cref="GeocodeResult.Source"/> records which source succeeded so the caller
+    /// can mark the photo accordingly.
     /// </summary>
     public async Task<GeocodeResult> ResolveAsync(double lat, double lon, CancellationToken ct = default)
     {
-        // Deterministic primary = configured source; fallback = the other.
-        string? primary = ConfiguredSource();
-        string? fallback = primary == "amap" ? "osm" : "amap";
+        // 智能选择：中国大陆优先高德（覆盖好、支持并发），境外优先 OSM（国际覆盖好）；
+        // 任一源失败都自动回退到另一源，保证尽量反解成功。
+        var (primary, fallback) = PickSources(lat, lon);
 
         if (primary is not null)
         {
@@ -57,14 +59,21 @@ public sealed class ReverseGeocodeService
         return new GeocodeResult(null, null);
     }
 
-    /// <summary>Which source is configured/usable: "amap" (when a key is set) or "osm".</summary>
-    private static string? ConfiguredSource()
+    /// <summary>
+    /// 依据坐标位置挑选反解主源与兜底源：中国大陆（含港澳台）优先高德，境外优先 OSM。
+    /// 高德仅在配置了 API Key 时可用；否则两地都只用 OSM。
+    /// </summary>
+    private static (string? Primary, string? Fallback) PickSources(double lat, double lon)
     {
-        if (GeocodeConfig.Source == "amap" && !string.IsNullOrWhiteSpace(GeocodeConfig.AmapKey))
+        bool inChina = lat is >= 18.0 and <= 53.6 && lon is >= 73.5 and <= 134.8;
+        bool amapUsable = !string.IsNullOrWhiteSpace(GeocodeConfig.AmapKey);
+        if (inChina)
         {
-            return "amap";
+            // 中国大陆：优先高德（可用时），OSM 兜底。
+            return (amapUsable ? "amap" : "osm", amapUsable ? "osm" : null);
         }
-        return "osm";
+        // 境外：优先 OSM，高德仅作兜底（境外覆盖差）。
+        return ("osm", amapUsable ? "amap" : null);
     }
 
     private async Task<GeocodeResult> TrySourceAsync(string source, double lat, double lon, CancellationToken ct)
@@ -220,7 +229,7 @@ public sealed class ReverseGeocodeService
             {
                 parts.Add(road);
             }
-            return parts.Count == 0 ? null : string.Join("", parts);
+            return parts.Count == 0 ? null : SplitJoinedAdminWords(string.Join("", parts));
         }
         catch
         {
@@ -265,13 +274,28 @@ public sealed class ReverseGeocodeService
             if (!string.IsNullOrWhiteSpace(township) && township != district) parts.Add(township!);
             if (!string.IsNullOrWhiteSpace(street) && street != township) parts.Add(street!);
             if (poi is { Length: > 0 and <= 24 } && poi != street) parts.Add(poi);
-            return parts.Count == 0 ? null : string.Join("", parts);
+            return parts.Count == 0 ? null : SplitJoinedAdminWords(string.Join("", parts));
         }
         catch
         {
             return null;
         }
     }
+
+    /// <summary>
+    /// Inserts a space between a common administrative word and the proper name glued to it by
+    /// <see cref="string.Join(string, IEnumerable{string})"/> with an empty separator — e.g.
+    /// "LandkreisGoslar" → "Landkreis Goslar", "DepartementDeLaSarthe" → "Departement De La Sarthe",
+    /// "RegionHannover" → "Region Hannover", "ProvinciaGranada" → "Provincia Granada". Covers the
+    /// frequent 德/法/西/英 行政前缀 so the concatenated reverse-geocode chain stays readable and
+    /// the LLM can split it into the five levels instead of swallowing the admin word into one token.
+    /// </summary>
+    private static readonly Regex AdminWordJoin = new(
+        @"(?<=(?:Landkreis|Regierungsbezirk|Kreisfreie|Stadtbezirk|Bezirk|Kreis|Region|Gemeinde|Amt|Freistaat|Stadt|Sankt|Departement|Arrondissement|Commune|Canton|Préfecture|Prefeitura|Provincia|Province|Municipio|Comarca|Distrito|Barrio|Partido|Comunidad|County|Borough|Quarter|District|Parish|Township|Municipality|Consell|Ville|Vila|Pueblo|San|Santa|Santo|São|Porto|Fuerte|Villa|Mount|Lake|Fort|Cape|North|South|East|West|Upper|Lower|New|Great|Little))(?!\s)(?=[A-ZÀÂÄÉÈÊËÎÏÔÖÙÛÜÇÑÁÍÓÚ])",
+        RegexOptions.Compiled);
+
+    private static string SplitJoinedAdminWords(string chain) =>
+        AdminWordJoin.Replace(chain, " ");
 
     private static string? Get(JsonElement obj, string name)
     {

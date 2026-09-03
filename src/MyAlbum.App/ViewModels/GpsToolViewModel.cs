@@ -230,6 +230,7 @@ public partial class GpsToolViewModel : ObservableObject
         {
             var (from, to) = DateRangeStrings();
             var photos = await _db.QueryPhotosAsync(dateFrom: from, dateTo: to, limit: int.MaxValue);
+            await RecoverMissingFileDataAsync(photos);
             var result = _grouping.Group(photos, ThresholdOptions[ThresholdIndex].Span);
 
             _anchors = photos.Where(p => p.GpsLatitude is not null && p.GpsLongitude is not null).ToList();
@@ -276,7 +277,9 @@ public partial class GpsToolViewModel : ObservableObject
                 {
                     Assignment = a,
                     File = photo.FileName,
-                    TimeText = photo.TakenAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "",
+                    // TakenAtUtc is the EXIF wall-clock shooting time (local, Unspecified) —
+                    // display it as-is; ToLocalTime() would assume UTC and shift by the TZ offset.
+                    TimeText = photo.TakenAtUtc?.ToString("yyyy-MM-dd HH:mm") ?? "",
                     ThumbImage = photo.ThumbnailCachePath is not null && File.Exists(photo.ThumbnailCachePath)
                         ? new BitmapImage(new Uri(photo.ThumbnailCachePath))
                         : null,
@@ -326,6 +329,49 @@ public partial class GpsToolViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Photos whose DB row lacks a shooting time and/or GPS usually still carry them in the
+    /// file's EXIF — re-read the file so the tool groups/displays by the real data instead of
+    /// treating GPS-having photos as "需补 GPS" (which would later overwrite their real
+    /// coordinates with an anchor's position). The recovered data is persisted via
+    /// <see cref="LibraryService.RefreshMetadataAsync"/>.
+    /// </summary>
+    private async Task RecoverMissingFileDataAsync(List<PhotoRecord> photos)
+    {
+        var missing = photos
+            .Where(p => p.TakenAtUtc is null || (p.GpsLatitude is null && p.GpsLongitude is null))
+            .ToList();
+        if (missing.Count == 0)
+        {
+            return;
+        }
+        await Parallel.ForEachAsync(missing, new ParallelOptions { MaxDegreeOfParallelism = 4 }, async (p, _) =>
+        {
+            try
+            {
+                var fresh = await _library.RefreshMetadataAsync(p.FilePath);
+                if (fresh is null)
+                {
+                    return;
+                }
+                if (fresh.TakenAtUtc is { } takenAt)
+                {
+                    p.TakenAtUtc = takenAt;
+                }
+                if (fresh.GpsLatitude is { } lat && fresh.GpsLongitude is { } lon)
+                {
+                    p.GpsLatitude = lat;
+                    p.GpsLongitude = lon;
+                    p.GpsAltitude = fresh.GpsAltitude;
+                }
+            }
+            catch
+            {
+                // best effort: keep the DB values if the file cannot be read
+            }
+        });
+    }
+
     private void RefreshItemStatus(GpsToolPhotoItem item)
     {
         var a = item.Assignment;
@@ -370,7 +416,7 @@ public partial class GpsToolViewModel : ObservableObject
     }
 
     private static string FormatAnchorTime(PhotoRecord anchor) =>
-        anchor.TakenAtUtc?.ToLocalTime().ToString("MM-dd HH:mm") ?? "--";
+        anchor.TakenAtUtc?.ToString("MM-dd HH:mm") ?? "--";
 
     private static string RangeText(DateTime? start, DateTime? end)
     {
@@ -378,8 +424,8 @@ public partial class GpsToolViewModel : ObservableObject
         {
             return "—";
         }
-        string s = start?.ToLocalTime().ToString("MM-dd HH:mm") ?? "?";
-        string e = end?.ToLocalTime().ToString("MM-dd HH:mm") ?? "?";
+        string s = start?.ToString("MM-dd HH:mm") ?? "?";
+        string e = end?.ToString("MM-dd HH:mm") ?? "?";
         return s == e ? s : $"{s} ~ {e}";
     }
 
@@ -407,6 +453,7 @@ public partial class GpsToolViewModel : ObservableObject
         {
             var (from, to) = DateRangeStrings();
             var photos = await _db.QueryPhotosAsync(dateFrom: from, dateTo: to, limit: int.MaxValue);
+            await RecoverMissingFileDataAsync(photos);
             var result = _grouping.Group(photos, ThresholdOptions[ThresholdIndex].Span);
             _anchors = photos.Where(p => p.GpsLatitude is not null && p.GpsLongitude is not null).ToList();
             _allAssignments = result.Groups.SelectMany(g => g.GpnItems).ToList();
@@ -556,6 +603,7 @@ public partial class GpsToolViewModel : ObservableObject
         a.AssignedLat = anchor.GpsLatitude;
         a.AssignedLon = anchor.GpsLongitude;
         a.AssignedAlt = anchor.GpsAltitude;
+        a.AssignedPlace = GpsPlaceData.From(anchor);
         a.ManuallySet = false;
     }
 
@@ -640,6 +688,7 @@ public partial class GpsToolViewModel : ObservableObject
                     a.AssignedLat = anchor.GpsLatitude;
                     a.AssignedLon = anchor.GpsLongitude;
                     a.AssignedAlt = anchor.GpsAltitude;
+                    a.AssignedPlace = GpsPlaceData.From(anchor);
                     a.ManuallySet = true;
                 }
                 foreach (var item in Groups.SelectMany(g => g.Photos))
@@ -666,8 +715,8 @@ public partial class GpsToolViewModel : ObservableObject
         {
             if (!_exif.IsAvailable)
             {
-                await _db.BulkSetGpsAsync(targets.Select(a => (
-                    a.Photo.Id, a.AssignedLat!.Value, a.AssignedLon!.Value, a.AssignedAlt)).ToList());
+                await _db.BulkSetGpsWithPlaceAsync(targets.Select(a => (
+                    a.Photo.Id, a.AssignedLat!.Value, a.AssignedLon!.Value, a.AssignedAlt, a.AssignedPlace)).ToList());
                 StatusText = $"已将 {targets.Count} 张照片的位置写入索引（未检测到 ExifTool，未写回源文件）";
                 return;
             }
@@ -689,9 +738,18 @@ public partial class GpsToolViewModel : ObservableObject
             var results = await _exif.WriteBatchAsync(edits, progress, keepOriginalBackup: true);
             int ok = results.Count(r => r.Success);
             int failed = results.Count - ok;
-            foreach (var r in results.Where(r => r.Success))
+            for (int i = 0; i < results.Count; i++)
             {
-                await _library.RefreshMetadataAsync(r.FilePath);
+                if (!results[i].Success)
+                {
+                    continue;
+                }
+                var a = targets[i];
+                await _library.RefreshMetadataAsync(a.Photo.FilePath);
+                // The anchor's reverse-geocoded place text is app-side data (not in EXIF) —
+                // re-apply it after the file re-read so the DB keeps the copied address.
+                await _db.BulkSetGpsWithPlaceAsync([
+                    (a.Photo.Id, a.AssignedLat!.Value, a.AssignedLon!.Value, a.AssignedAlt, a.AssignedPlace)]);
             }
             ProgressText = "";
             StatusText = failed == 0

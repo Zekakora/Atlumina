@@ -1,4 +1,5 @@
 using MyAlbum.Core.Data;
+using MyAlbum.Core.Models;
 
 namespace MyAlbum.Core.Services;
 
@@ -10,6 +11,7 @@ public sealed class DatabaseHealthReport
     public long PhotoCount { get; set; }
     public long ActivePhotoCount { get; set; }
     public long RedundantMissingPhotoCount { get; set; }
+    public int CaseDuplicateCount { get; set; }
     public long TotalThumbnailCount { get; set; }
     public int OrphanThumbnailCount { get; set; }
     public long OrphanThumbnailBytes { get; set; }
@@ -22,6 +24,7 @@ public sealed class DatabaseHealthReport
 public sealed class DatabaseCleanupResult
 {
     public int RemovedMissingPhotos { get; set; }
+    public int RemovedCaseDuplicates { get; set; }
     public int RemovedOrphanThumbnails { get; set; }
     public long FreedThumbnailBytes { get; set; }
     public long RemovedOrphanPhotoTags { get; set; }
@@ -66,9 +69,19 @@ public sealed class DatabaseMaintenanceService
         report.PhotoCount = counts.Total;
         report.ActivePhotoCount = counts.Active;
 
-        progress?.Report("正在检查缺失记录…");
-        var missing = await _db.GetMissingPhotosAsync();
-        report.RedundantMissingPhotoCount = missing.Count(m => !File.Exists(m.FilePath));
+        progress?.Report("正在检查缺失文件…");
+        // Check disk existence for EVERY row, not just the ones already flagged IsMissing:
+        // a file deleted externally is only flagged when the folder watcher or a folder scan
+        // saw it disappear — if both were missed (app closed, folder removed, watcher dropped
+        // the event), the flag is still 0 but the file is just as redundant.
+        var rows = await _db.GetPhotoExistenceRowsAsync();
+        report.RedundantMissingPhotoCount = CountMissingOnDisk(rows);
+
+        progress?.Report("正在检查重复路径…");
+        var dupRows = await _db.GetCaseDuplicateRowsAsync();
+        report.CaseDuplicateCount = dupRows
+            .GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Count(g => g.Count() > 1);
 
         progress?.Report("正在扫描孤立缩略图…");
         var (orphans, totalCount) = await ScanThumbnailCacheAsync(progress);
@@ -90,18 +103,86 @@ public sealed class DatabaseMaintenanceService
     {
         var result = new DatabaseCleanupResult();
 
-        // 1) Drop redundant IsMissing rows (file really gone) + their grid thumbnails.
-        progress?.Report("正在清理缺失照片记录…");
-        var missing = await _db.GetMissingPhotosAsync();
-        var toRemove = missing.Where(m => !File.Exists(m.FilePath)).ToList();
-        foreach (var m in toRemove)
+        // 1) Drop every row whose file is gone from disk — regardless of whether the IsMissing
+        //    flag was ever set (externally deleted files may never have been flagged). Also
+        //    clear the flag on rows whose file came back (restored from recycle bin), so they
+        //    are not stuck invisible in the grid. All existence checks run in parallel.
+        progress?.Report("正在检查缺失照片记录…");
+        var rows = await _db.GetPhotoExistenceRowsAsync();
+        var removedPaths = new List<string>(rows.Count);
+        var removedThumbs = new List<string?>(rows.Count);
+        var restored = new List<string>();
+        var sync = new object();
+        Parallel.ForEach(rows, row =>
         {
-            if (!string.IsNullOrEmpty(m.ThumbnailCachePath))
+            bool exists = File.Exists(row.FilePath);
+            if (!exists)
             {
-                TryDeleteFile(m.ThumbnailCachePath);
+                lock (sync)
+                {
+                    removedPaths.Add(row.FilePath);
+                    removedThumbs.Add(row.ThumbnailCachePath);
+                }
+            }
+            else if (row.IsMissing)
+            {
+                lock (sync)
+                {
+                    restored.Add(row.FilePath);
+                }
+            }
+        });
+        foreach (var thumb in removedThumbs)
+        {
+            if (!string.IsNullOrEmpty(thumb))
+            {
+                TryDeleteFile(thumb);
             }
         }
-        result.RemovedMissingPhotos = await _db.DeleteMissingPhotosAsync(toRemove.Select(m => m.FilePath).ToList());
+        result.RemovedMissingPhotos = await _db.DeleteMissingPhotosAsync(removedPaths);
+        if (restored.Count > 0)
+        {
+            await _db.MarkMissingBatchAsync(restored, false);
+        }
+
+        // 2) Case-insensitive duplicate FilePath rows: a file rewritten/renamed with a different
+        //    case can leave two rows for one physical file (the FilePath UNIQUE is BINARY). Keep
+        //    the freshest row per group, drop the rest (plus their thumbnails).
+        progress?.Report("正在清理重复路径记录…");
+        var dupRows = await _db.GetCaseDuplicateRowsAsync();
+        var dupDrop = new List<(string Path, string? Thumb)>();
+        foreach (var group in dupRows.GroupBy(r => r.FilePath, StringComparer.OrdinalIgnoreCase))
+        {
+            if (group.Count() <= 1)
+            {
+                continue;
+            }
+            PhotoRecord? best = null;
+            foreach (var row in group)
+            {
+                if (best is null || IsFresher(row, best))
+                {
+                    if (best is not null)
+                    {
+                        dupDrop.Add((best.FilePath, best.ThumbnailCachePath));
+                    }
+                    best = row;
+                    continue;
+                }
+                dupDrop.Add((row.FilePath, row.ThumbnailCachePath));
+            }
+        }
+        foreach (var (_, thumb) in dupDrop)
+        {
+            if (!string.IsNullOrEmpty(thumb))
+            {
+                TryDeleteFile(thumb);
+            }
+        }
+        if (dupDrop.Count > 0)
+        {
+            result.RemovedCaseDuplicates = await _db.DeleteMissingPhotosAsync(dupDrop.Select(d => d.Path).ToList());
+        }
 
         // 2) Orphan thumbnails (path hash not referenced by any indexed photo). Re-query
         //    the referenced set AFTER removing the missing rows so their preview renders
@@ -176,6 +257,50 @@ public sealed class DatabaseMaintenanceService
         using var sha = System.Security.Cryptography.SHA256.Create();
         var hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(path));
         return Convert.ToHexString(hash)[..24].ToLowerInvariant();
+    }
+
+    /// <summary>Counts rows whose file is absent from disk. Existence probes are IO-bound and
+    /// run in parallel — for tens of thousands of photos this stays well under a second.</summary>
+    private static int CountMissingOnDisk(List<PhotoDatabase.PhotoExistenceRow> rows)
+    {
+        int missing = 0;
+        Parallel.ForEach(rows, row =>
+        {
+            if (!File.Exists(row.FilePath))
+            {
+                Interlocked.Increment(ref missing);
+            }
+        });
+        return missing;
+    }
+
+    /// <summary>True when <paramref name="a"/> is the better of two rows pointing at the same
+    /// physical file (case-insensitive duplicate): one whose size/time matches disk wins,
+    /// otherwise the most recently indexed row.</summary>
+    private static bool IsFresher(PhotoRecord a, PhotoRecord b)
+    {
+        bool aMatches = FingerprintMatchesDisk(a);
+        bool bMatches = FingerprintMatchesDisk(b);
+        if (aMatches != bMatches)
+        {
+            return aMatches;
+        }
+        return (a.IndexedAtUtc) >= (b.IndexedAtUtc);
+    }
+
+    private static bool FingerprintMatchesDisk(PhotoRecord p)
+    {
+        try
+        {
+            var fi = new FileInfo(p.FilePath);
+            return fi.Exists
+                && p.FileSizeBytes == fi.Length
+                && Math.Abs((p.FileModifiedUtc - fi.LastWriteTimeUtc).TotalSeconds) < 2;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private long DbFileSize()

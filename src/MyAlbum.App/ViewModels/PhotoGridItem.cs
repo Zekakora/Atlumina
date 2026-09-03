@@ -49,6 +49,10 @@ public partial class PhotoGridItem : ObservableObject
     [ObservableProperty]
     public partial bool IsSuggestedKeep { get; set; }
 
+    /// <summary>True when the photo is part of the current multi-selection (Ctrl/Shift/Ctrl+A).</summary>
+    [ObservableProperty]
+    public partial bool IsSelected { get; set; }
+
     public bool HasRating => Rating > 0;
 
     /// <summary>Back-fills the thumbnail path once a missing render is generated in the

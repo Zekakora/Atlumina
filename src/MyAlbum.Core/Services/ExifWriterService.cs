@@ -253,7 +253,10 @@ public sealed class ExifWriterService
 
         if (edit.TakenAtUtc is { } takenAt)
         {
-            string stamp = takenAt.ToLocalTime().ToString("yyyy:MM:dd HH:mm:ss");
+            // TakenAtUtc is the EXIF wall-clock shooting time (camera-local, Unspecified).
+            // Write it verbatim — ToLocalTime() would assume UTC and shift by the TZ offset,
+            // corrupting the stored date (e.g. 15:05 → 23:05 on a UTC+8 machine).
+            string stamp = takenAt.ToString("yyyy:MM:dd HH:mm:ss");
             args.Add($"-DateTimeOriginal={stamp}");
             args.Add($"-CreateDate={stamp}");
             args.Add($"-ModifyDate={stamp}");
@@ -274,22 +277,32 @@ public sealed class ExifWriterService
         if (edit.ClearGps)
         {
             args.Add("-GPSLatitude=");
+            args.Add("-GPSLatitudeRef=");
             args.Add("-GPSLongitude=");
+            args.Add("-GPSLongitudeRef=");
             args.Add("-GPSAltitude=");
+            args.Add("-GPSAltitudeRef=");
         }
         else
         {
+            // ExifTool does NOT always write the GPS *Ref tags when a file never had GPS,
+            // and MetadataExtractor's GetGeoLocation() returns null without them — so the
+            // freshly written coordinates would be invisible to our own reader. Write the
+            // refs explicitly (derived from the value sign) to guarantee round-trip.
             if (edit.GpsLatitude is { } lat)
             {
                 args.Add($"-GPSLatitude={lat.ToString("F6", System.Globalization.CultureInfo.InvariantCulture)}");
+                args.Add($"-GPSLatitudeRef={(lat < 0 ? "S" : "N")}");
             }
             if (edit.GpsLongitude is { } lon)
             {
                 args.Add($"-GPSLongitude={lon.ToString("F6", System.Globalization.CultureInfo.InvariantCulture)}");
+                args.Add($"-GPSLongitudeRef={(lon < 0 ? "W" : "E")}");
             }
             if (edit.GpsAltitude is { } alt)
             {
                 args.Add($"-GPSAltitude={alt.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}");
+                args.Add($"-GPSAltitudeRef={(alt < 0 ? "1" : "0")}");
             }
         }
 

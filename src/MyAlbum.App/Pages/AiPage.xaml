@@ -233,10 +233,18 @@
                             </StackPanel>
                         </Button>
                         <Button Command="{x:Bind ViewModel.CancelNormalizeCommand}"
-                                Visibility="{x:Bind ViewModel.IsNormalizingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                 Visibility="{x:Bind ViewModel.IsNormalizingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon Glyph="&#xE711;" FontSize="14" />
                                 <TextBlock Text="取消" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{x:Bind ViewModel.ResetAddressesCommand}"
+                                 IsEnabled="{x:Bind ViewModel.IsResettingAddresses, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                                ToolTipService.ToolTip="清空全部 LLM 规范地址（保留反解位置），可重新运行规范">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE894;" FontSize="14" />
+                                <TextBlock Text="重置 LLM 结果" />
                             </StackPanel>
                         </Button>
                         <TextBlock Text="{x:Bind ViewModel.AddressCoverageText, Mode=OneWay}" VerticalAlignment="Center"
@@ -256,6 +264,21 @@
                             <TextBlock Text="查看被跳过的照片" />
                         </StackPanel>
                     </Button>
+                    <Button Command="{x:Bind ViewModel.VerifyAddressesCommand}"
+                            IsEnabled="{x:Bind ViewModel.IsVerifyingAddresses, Mode=OneWay, Converter={StaticResource InvertBool}}"
+                            ToolTipService.ToolTip="用 LLM 依据原始反解地点名，对已有规范结果做二次查错纠正（如把误判为省的区/街道改回）">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon Glyph="&#xE945;" FontSize="14" />
+                            <TextBlock Text="二次查错（LLM）" />
+                        </StackPanel>
+                    </Button>
+                    <TextBlock Text="{x:Bind ViewModel.VerifyStatusText, Mode=OneWay}" Style="{StaticResource CardDescStyle}" />
+                    <ProgressBar Height="4" Minimum="0" Maximum="1"
+                                 Value="{x:Bind ViewModel.VerifyProgress, Mode=OneWay}"
+                                 Visibility="{x:Bind ViewModel.IsVerifyingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{x:Bind ViewModel.VerifyProgressText, Mode=OneWay}"
+                               Visibility="{x:Bind ViewModel.IsVerifyingAddresses, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                               Style="{StaticResource CardDescStyle}" />
                 </StackPanel>
             </Border>
 

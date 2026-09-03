@@ -42,7 +42,7 @@ public static class ProcessingConfig
     public static int LlmParallelism { get; private set; } = 16;
 
     /// <summary>每次 LLM 请求处理的地点名数量（20..100）。</summary>
-    public static int LlmBatchSize { get; private set; } = 40;
+    public static int LlmBatchSize { get; private set; } = 20;
 
     public static void SetGeocodeParallelism(int value) => GeocodeParallelism = Math.Clamp(value, 1, MaxParallelism);
 

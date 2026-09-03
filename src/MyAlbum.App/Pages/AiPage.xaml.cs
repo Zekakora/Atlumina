@@ -10,25 +10,42 @@ public sealed partial class AiPage : Page
 {
     public AiViewModel ViewModel { get; }
 
+    /// <summary>首次进入才跑重活（相似组检测、设备探测）；切走再切回只刷廉价计数。</summary>
+    private bool _loaded;
+
     public AiPage()
     {
         InitializeComponent();
+        // 切走再切回不重建页面：避免每次切换都重新解析 XAML 并重跑重查询。
+        NavigationCacheMode = NavigationCacheMode.Required;
         ViewModel = App.Services.GetRequiredService<AiViewModel>();
     }
 
-    protected override void OnNavigatedTo(NavigationEventArgs e)
+    protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
-        ViewModel.RefreshDeviceInfo();
-        _ = ViewModel.LoadResultsAsync();
-        _ = ViewModel.LoadDeepResultsAsync();
-        _ = ViewModel.LoadPlaceCoverageAsync();
-        _ = ViewModel.LoadAddressCoverageAsync();
         // Reflect a query routed from the top search bar (semantic mode).
         if (!string.IsNullOrWhiteSpace(ViewModel.SearchQuery) && SearchQueryBox is not null)
         {
             SearchQueryBox.Text = ViewModel.SearchQuery;
         }
+        if (_loaded)
+        {
+            // 已加载过：只刷新廉价的 COUNT 类覆盖数据，不重跑 GetPhotosAsync / 相似组检测。
+            _ = ViewModel.LoadDeepResultsAsync();
+            _ = ViewModel.LoadPlaceCoverageAsync();
+            _ = ViewModel.LoadAddressCoverageAsync();
+            return;
+        }
+        _loaded = true;
+        // 先让 Frame 绘制出新页面，再启动设备探测与各加载（探测是同步 DXCore 调用，
+        // 若放在 OnNavigatedTo 同步段会在 UI 线程上卡住切换本身）。
+        await Task.Yield();
+        ViewModel.RefreshDeviceInfo();
+        _ = ViewModel.LoadResultsAsync();
+        _ = ViewModel.LoadDeepResultsAsync();
+        _ = ViewModel.LoadPlaceCoverageAsync();
+        _ = ViewModel.LoadAddressCoverageAsync();
     }
 
     private async void SearchBox_OnQuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)

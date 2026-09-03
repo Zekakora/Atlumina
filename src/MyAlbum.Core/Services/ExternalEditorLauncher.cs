@@ -59,6 +59,11 @@ public sealed class ExternalEditorLauncher
         };
         if (editor is not null)
         {
+            // Bridge 走「写临时请求文件 → 启动脚本自动唤起 ACR」的通道（见 AutoOpenACR.jsx）。
+            if (editor.Value.Display == "Adobe Bridge")
+            {
+                WriteBridgeAcrRequest(filePath);
+            }
             psi.ArgumentList.Add(filePath);
         }
 
@@ -70,6 +75,25 @@ public sealed class ExternalEditorLauncher
         catch (Exception ex)
         {
             return ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Bridge 本身不能直接从命令行把文件送进 ACR，需要借助启动脚本（AutoOpenACR.jsx）。
+    /// 该脚本常驻轮询 %TEMP%\bridge_open_acr.txt，读到新请求就自动选中文件并唤起 ACR，
+    /// 因此这里先把目标文件写进去再启动 Bridge。脚本缺失时写文件无害，Bridge 仍会正常打开。
+    /// 第二行为 nonce（时间戳），用于区分「同一文件再次点击」这种需要重新唤起 ACR 的场景。
+    /// </summary>
+    private static void WriteBridgeAcrRequest(string filePath)
+    {
+        try
+        {
+            var tempFile = Path.Combine(Path.GetTempPath(), "bridge_open_acr.txt");
+            File.WriteAllText(tempFile, filePath + "\n" + DateTime.UtcNow.Ticks.ToString());
+        }
+        catch
+        {
+            // 写失败不应阻塞启动 Bridge
         }
     }
 

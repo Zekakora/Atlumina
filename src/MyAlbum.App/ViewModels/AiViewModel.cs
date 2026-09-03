@@ -182,6 +182,21 @@ public partial class AiViewModel : ObservableObject
     public partial bool IsResettingPlaces { get; set; }
 
     [ObservableProperty]
+    public partial bool IsResettingAddresses { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsVerifyingAddresses { get; set; }
+
+    [ObservableProperty]
+    public partial string VerifyStatusText { get; set; } = "";
+
+    [ObservableProperty]
+    public partial double VerifyProgress { get; set; }
+
+    [ObservableProperty]
+    public partial string VerifyProgressText { get; set; } = "";
+
+    [ObservableProperty]
     public partial double PlaceProgress { get; set; }
 
     [ObservableProperty]
@@ -358,6 +373,8 @@ public partial class AiViewModel : ObservableObject
     public IAsyncRelayCommand BackfillPlacesCommand { get; }
     public IRelayCommand CancelPlaceCommand { get; }
     public IAsyncRelayCommand ResetPlacesCommand { get; }
+    public IAsyncRelayCommand ResetAddressesCommand { get; }
+    public IAsyncRelayCommand VerifyAddressesCommand { get; }
     public IAsyncRelayCommand NormalizeAddressesCommand { get; }
     public IRelayCommand CancelNormalizeCommand { get; }
 
@@ -390,6 +407,8 @@ public partial class AiViewModel : ObservableObject
         BackfillPlacesCommand = new AsyncRelayCommand(BackfillPlacesAsync, () => !IsPlaceBackfilling);
         CancelPlaceCommand = new RelayCommand(() => _placeCts?.Cancel(), () => IsPlaceBackfilling);
         ResetPlacesCommand = new AsyncRelayCommand(ResetPlacesAsync, () => !IsResettingPlaces);
+        ResetAddressesCommand = new AsyncRelayCommand(ResetAddressesAsync, () => !IsResettingAddresses);
+        VerifyAddressesCommand = new AsyncRelayCommand(VerifyAddressesAsync, () => !IsVerifyingAddresses);
         NormalizeAddressesCommand = new AsyncRelayCommand(NormalizeAddressesAsync, () => !IsNormalizingAddresses);
         CancelNormalizeCommand = new RelayCommand(() => _addressCts?.Cancel(), () => IsNormalizingAddresses);
     }
@@ -431,6 +450,8 @@ public partial class AiViewModel : ObservableObject
     }
 
     partial void OnIsResettingPlacesChanged(bool value) => ResetPlacesCommand.NotifyCanExecuteChanged();
+    partial void OnIsResettingAddressesChanged(bool value) => ResetAddressesCommand.NotifyCanExecuteChanged();
+    partial void OnIsVerifyingAddressesChanged(bool value) => VerifyAddressesCommand.NotifyCanExecuteChanged();
 
     partial void OnIsNormalizingAddressesChanged(bool value)
     {
@@ -682,8 +703,9 @@ public partial class AiViewModel : ObservableObject
         long total = await _db.GetPhotoCountAsync();
         AnalyzedText = $"已分析 {analyzed}/{total} 张";
 
-        // Blurry photos (lowest Laplacian variance first).
-        var blurry = await _db.GetBlurryPhotosAsync(VisionAnalysisService.BlurThreshold, 200);
+        // Blurry photos (lowest Laplacian variance first). The heavy reads run on a
+        // background thread so the AI page never materializes them on the UI thread.
+        var blurry = await Task.Run(() => _db.GetBlurryPhotosAsync(VisionAnalysisService.BlurThreshold, 200).GetAwaiter().GetResult());
         BlurryCount = blurry.Count;
         BlurryPhotos.Clear();
         foreach (var p in blurry)
@@ -697,7 +719,7 @@ public partial class AiViewModel : ObservableObject
         // Similar-photo groups from stored pHash (DuplicateService reads them from the DB).
         // FindDuplicates runs on a background thread: photos without a stored content hash
         // are fully read to compute SHA-256, which must never block the UI thread.
-        var all = await _db.GetPhotosAsync(10000);
+        var all = await Task.Run(() => _db.GetPhotosAsync(10000).GetAwaiter().GetResult());
         var groups = await Task.Run(() =>
             _dupes.FindDuplicates(all)
                 .Where(g => !g.IsExact)
@@ -769,10 +791,8 @@ public partial class AiViewModel : ObservableObject
     public async Task LoadDeepResultsAsync()
     {
         DeepAnalyzedCount = (int)await _db.CountDeepAnalyzedPhotosAsync();
-        var low = await _db.GetLowAestheticPhotosAsync(DeepAnalysisService.LowAestheticThreshold, int.MaxValue);
-        LowAestheticCount = low.Count;
-        var mono = await _db.GetMonoPhotosAsync(int.MaxValue);
-        MonoCount = mono.Count;
+        LowAestheticCount = (int)await _db.CountLowAestheticPhotosAsync(DeepAnalysisService.LowAestheticThreshold);
+        MonoCount = (int)await _db.CountMonoPhotosAsync();
     }
 
     /// <summary>Loads the GPS-place coverage count (how many photos already have a place name, by source).</summary>
@@ -852,6 +872,70 @@ public partial class AiViewModel : ObservableObject
         finally
         {
             IsResettingPlaces = false;
+        }
+    }
+
+    /// <summary>Clears only the LLM-normalized five-level address (keeps the reverse-geocoded
+    /// <c>GpsPlace</c>), so the address normalization pass can run again from scratch.</summary>
+    public async Task ResetAddressesAsync()
+    {
+        IsResettingAddresses = true;
+        NormalizeStatusText = "正在重置 LLM 规范地址…";
+        try
+        {
+            await _db.ResetPlaceAddressesAsync();
+            await LoadAddressCoverageAsync();
+            await _home.RefreshPlaceAddressesAsync();
+            NormalizeStatusText = "已清空全部 LLM 规范地址（反解位置保留），可重新运行规范。";
+        }
+        catch (Exception ex)
+        {
+            NormalizeStatusText = "重置失败：" + ex.Message;
+        }
+        finally
+        {
+            IsResettingAddresses = false;
+        }
+    }
+
+    /// <summary>Second-pass LLM verification: re-checks each already-normalized address against its
+    /// (correct) reverse-geocoded place name and corrects obvious errors. See
+    /// <see cref="AddressNormalizeService.VerifyAddressesAsync"/>.</summary>
+    public async Task VerifyAddressesAsync()
+    {
+        if (!LlmConfig.IsConfigured)
+        {
+            VerifyStatusText = "未配置大语言模型：请在「设置 → 大语言模型」填写 API 密钥。";
+            return;
+        }
+        IsVerifyingAddresses = true;
+        VerifyStatusText = "正在用 LLM 二次查错…";
+        VerifyProgress = 0;
+        try
+        {
+            var progress = new Progress<(int Done, int Total, string File)>(p =>
+            {
+                VerifyProgress = p.Total == 0 ? 0 : p.Done / (double)p.Total;
+                VerifyProgressText = string.IsNullOrWhiteSpace(p.File)
+                    ? $"已处理 {p.Done}/{p.Total}"
+                    : p.File;
+            });
+            var result = await _addressNormalizer.VerifyAddressesAsync(progress);
+            await LoadAddressCoverageAsync();
+            await _home.RefreshPlaceAddressesAsync();
+            VerifyStatusText = result.FailedBatches > 0
+                ? $"二次查错完成：纠正 {result.Corrected} 张，未变 {result.Unchanged}；失败 {result.FailedBatches} 批将可重试。" +
+                  (result.LastError is { } e ? $" 原因：{e}" : "")
+                : $"二次查错完成：纠正 {result.Corrected} 张，未变 {result.Unchanged} 张。";
+        }
+        catch (Exception ex)
+        {
+            VerifyStatusText = "二次查错失败：" + ex.Message;
+        }
+        finally
+        {
+            IsVerifyingAddresses = false;
+            VerifyProgress = 0;
         }
     }
 
