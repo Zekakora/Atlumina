@@ -142,8 +142,14 @@ public sealed class DbFileDiffService
             item.ActualModifiedUtc = fi.LastWriteTimeUtc;
             item.ActualSizeBytes = fi.Length;
 
+            // Rows lacking GPS are always re-read: the source file may carry GPS coordinates
+            // that our older reader couldn't parse (e.g. coordinates written without the
+            // N/S/E/W *Ref tags, which Windows tolerates but MetadataExtractor rejects), so a
+            // size/modified match must not hide a fixable GPS gap.
             bool fastMatch = db.FileSizeBytes == fi.Length
-                && Math.Abs((db.FileModifiedUtc - fi.LastWriteTimeUtc).TotalSeconds) < MtimeToleranceSeconds;
+                && Math.Abs((db.FileModifiedUtc - fi.LastWriteTimeUtc).TotalSeconds) < MtimeToleranceSeconds
+                && db.GpsLatitude is not null
+                && db.GpsLongitude is not null;
             if (fastMatch)
             {
                 item.Status = DiffStatus.Match;
@@ -177,6 +183,11 @@ public sealed class DbFileDiffService
         if (!TimesEqual(db.TakenAtUtc, fresh.TakenAtUtc))
         {
             item.ChangedFields.Add("拍摄时间");
+        }
+        if (!DoublesEqual(db.GpsLatitude, fresh.GpsLatitude)
+            || !DoublesEqual(db.GpsLongitude, fresh.GpsLongitude))
+        {
+            item.ChangedFields.Add("位置");
         }
         if (!StringsEqual(db.CameraMake, fresh.CameraMake) || !StringsEqual(db.CameraModel, fresh.CameraModel))
         {
@@ -293,6 +304,16 @@ public sealed class DbFileDiffService
             return a is null && b is null;
         }
         return Math.Abs((a.Value - b.Value).TotalSeconds) < MtimeToleranceSeconds;
+    }
+
+    private static bool DoublesEqual(double? a, double? b)
+    {
+        if (a is null || b is null)
+        {
+            return a is null && b is null;
+        }
+        // 1e-6 degrees ≈ 0.1 m — enough to distinguish real coordinates from float noise.
+        return Math.Abs(a.Value - b.Value) < 1e-6;
     }
 
     private static bool StringsEqual(string? a, string? b) =>

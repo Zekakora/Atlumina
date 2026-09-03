@@ -1,5 +1,30 @@
 namespace MyAlbum.Core.Models;
 
+/// <summary>地理位置的解析结果（拍摄地址 + 五级地址），随锚点坐标一并复制到目标照片。</summary>
+public sealed record GpsPlaceData(
+    string? Place,
+    string? Source,
+    string? Country,
+    string? Province,
+    string? City,
+    string? District,
+    string? Landmark)
+{
+    /// <summary>从照片记录提取位置数据；无任何解析结果时返回 null。</summary>
+    public static GpsPlaceData? From(PhotoRecord p)
+    {
+        if (string.IsNullOrEmpty(p.GpsPlace)
+            && p.PlaceCountry is null && p.PlaceProvince is null
+            && p.PlaceCity is null && p.PlaceDistrict is null && p.PlaceLandmark is null)
+        {
+            return null;
+        }
+        return new GpsPlaceData(
+            p.GpsPlace, p.GpsPlaceSource,
+            p.PlaceCountry, p.PlaceProvince, p.PlaceCity, p.PlaceDistrict, p.PlaceLandmark);
+    }
+}
+
 /// <summary>分组类型：组内有带 GPS 的照片即可自动链式归类，否则需手动设置。</summary>
 public enum GpsGroupKind
 {
@@ -16,6 +41,9 @@ public sealed class GpnAssignment
     public double? AssignedLat { get; set; }
     public double? AssignedLon { get; set; }
     public double? AssignedAlt { get; set; }
+
+    /// <summary>从锚点复制的地理位置解析数据（拍摄地址），写回时一并写入数据库。</summary>
+    public GpsPlaceData? AssignedPlace { get; set; }
 
     /// <summary>时间上最近的带 GPS 锚点（链式来源）。</summary>
     public PhotoRecord? NearestAnchor { get; set; }

@@ -191,7 +191,7 @@ public sealed partial class DbFileDiffViewModel : ObservableObject
             FileModifiedText = d.ActualModifiedUtc is { } m ? m.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") : "—",
             FileSizeText = FormatBytes(d.ActualSizeBytes ?? db.FileSizeBytes),
             CameraText = $"{db.CameraMake} {db.CameraModel}".Trim() is { Length: > 0 } c ? c : "—",
-            TakenText = db.TakenAtUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—",
+            TakenText = db.TakenAtUtc?.ToString("yyyy-MM-dd HH:mm") ?? "—",
             HasDiff = hasDiff,
             IsMatch = d.Status == DiffStatus.Match,
             IsMissing = d.Status == DiffStatus.FileMissing,
@@ -267,7 +267,7 @@ public sealed partial class DbFileDiffViewModel : ObservableObject
         try
         {
             int ok = await Task.Run(() => _service.OverwriteDatabaseFromFilesAsync(selected));
-            StatusText = $"已将 {ok} 张照片的元数据覆盖到数据库（大小/修改时间/拍摄时间/相机/尺寸）。评分、标签、缩略图未改动。";
+            StatusText = $"已将 {ok} 张照片的元数据覆盖到数据库（大小/修改时间/拍摄时间/相机/尺寸/位置）。评分、标签、缩略图未改动。";
             await App.Services.GetRequiredService<HomeViewModel>().RefreshAsync();
             return null;
         }

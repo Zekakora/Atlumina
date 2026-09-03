@@ -5,8 +5,8 @@ namespace MyAlbum_App.ViewModels;
 
 /// <summary>
 /// A node in the 地点 sidebar tree built from the LLM-normalized five-level address.
-/// Levels: 国家 → 省/州 → 市. 直辖市（province 为空）跳过省一级 → 国家→市；小国只到国家。
-/// 区/县/街道 与 地标 不在此树中（仅用于搜索）。
+/// Levels: 国家 → 一级行政区 → 二级行政区. 空级跳过（微型国家只到国家）；直辖市/城市州下沉后
+/// 一级行政区有值（中国→天津市→和平区）。区/县/街道 与 地标 不在此树中（仅用于搜索）。
 /// </summary>
 public partial class LocationNode : ObservableObject
 {

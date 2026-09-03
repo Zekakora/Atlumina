@@ -32,7 +32,20 @@
                 PointerEntered="Tile_PointerEntered"
                 PointerExited="Tile_PointerExited"
                 Tapped="GridTile_OnTapped"
-                DoubleTapped="GridTile_OnDoubleTapped">
+                DoubleTapped="GridTile_OnDoubleTapped"
+                RightTapped="GridTile_OnRightTapped">
+                <Grid.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="在资源管理器中显示" Click="RevealInExplorer_OnClick">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8DA;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="重新获取地理位置及规范" Click="RefreshLocations_OnClick" />
+                        <MenuFlyoutItem Text="重新获取地理位置及规范（相似复用）" Click="RefreshLocationsReuse_OnClick" />
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
                 <Border
                     CornerRadius="8"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -58,6 +71,22 @@
                     VerticalAlignment="Top"
                     Margin="8"
                     Visibility="{x:Bind HasRating, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                <!-- 多选高亮边框 + 勾选角标 -->
+                <Border
+                    CornerRadius="8"
+                    BorderBrush="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                    BorderThickness="2"
+                    IsHitTestVisible="False"
+                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                <FontIcon
+                    Glyph="&#xE73E;"
+                    FontSize="14"
+                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="6"
+                    IsHitTestVisible="False"
+                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
             </Grid>
         </DataTemplate>
         <DataTemplate x:Key="GridRowTemplate" x:DataType="vm:PhotoGridRow">
@@ -108,7 +137,7 @@
         </Style>
     </Page.Resources>
 
-    <Grid x:Name="HomeRoot">
+    <Grid x:Name="HomeRoot" KeyDown="HomePage_OnKeyDown">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -180,6 +209,7 @@
                     FontSize="11"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 <FontIcon
+                    x:Name="ScanSummaryIcon"
                     Glyph="&#xE73E;"
                     FontSize="13"
                     VerticalAlignment="Center"
@@ -188,9 +218,25 @@
                 <TextBlock
                     VerticalAlignment="Center"
                     Text="{x:Bind ViewModel.ScanSummary, Mode=OneWay}"
+                    ToolTipService.ToolTip="{x:Bind ViewModel.ScanFailureToolTip, Mode=OneWay}"
                     Visibility="{x:Bind ViewModel.HasScanSummary, Mode=OneWay, Converter={StaticResource BoolToVis}}"
                     FontSize="12"
                     Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <!-- 右键「重新获取地理位置及规范」批量进度（与扫描进度互斥显示） -->
+                <ProgressBar
+                    Width="140"
+                    Height="4"
+                    VerticalAlignment="Center"
+                    Minimum="0"
+                    Maximum="1"
+                    Value="{x:Bind ViewModel.LocationProgress, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.IsRefreshingLocation, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Text="{x:Bind ViewModel.LocationProgressText, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.IsRefreshingLocation, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                    FontSize="11"
+                    Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
             </StackPanel>
 
             <!-- Right: filter status -->
@@ -391,21 +437,6 @@
                     Message="该区域用于展示 AI 分析提醒（阶段 4 提供），可在「设置」中重新打开。" />
 
                 <Grid Grid.Row="1">
-                    <!-- 时间轴白底渐变：叠加在照片内容下方，随 ruler 悬停淡入（不再盖住照片） -->
-                    <Rectangle
-                        x:Name="RulerScrim"
-                        Width="170"
-                        HorizontalAlignment="Right"
-                        Opacity="0"
-                        IsHitTestVisible="False">
-                        <Rectangle.Fill>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                <GradientStop Offset="0" Color="#00FFFFFF" />
-                                <GradientStop Offset="0.5" Color="#33FFFFFF" />
-                                <GradientStop Offset="1" Color="#C8FFFFFF" />
-                            </LinearGradientBrush>
-                        </Rectangle.Fill>
-                    </Rectangle>
                     <!-- 自适应瀑布流照片网格（行等高、整行铺满） -->
                     <ScrollViewer
                         x:Name="PhotoScroller"

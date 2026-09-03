@@ -316,7 +316,7 @@ public sealed class PhotoDatabase
 
     public async Task<long> UpsertPhotoAsync(PhotoRecord p)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -415,7 +415,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync(ct);
+        await Task.Run(() => _gate.Wait(ct)).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -565,12 +565,12 @@ public sealed class PhotoDatabase
 
     public async Task<PhotoRecord?> GetPhotoByPathAsync(string path)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "SELECT * FROM Photos WHERE FilePath = $path LIMIT 1;";
+            cmd.CommandText = "SELECT * FROM Photos WHERE FilePath = $path COLLATE NOCASE LIMIT 1;";
             cmd.Parameters.AddWithValue("$path", path);
             using var reader = cmd.ExecuteReader();
             return reader.Read() ? ReadPhoto(reader) : null;
@@ -583,7 +583,7 @@ public sealed class PhotoDatabase
 
     public async Task<PhotoRecord?> GetPhotoByIdAsync(long id)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -610,7 +610,7 @@ public sealed class PhotoDatabase
         {
             return new List<PhotoRecord>();
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             var byId = new Dictionary<long, PhotoRecord>();
@@ -649,7 +649,7 @@ public sealed class PhotoDatabase
 
     public async Task<List<PhotoRecord>> GetPhotosAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -677,7 +677,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetGpsPhotosAsync(int limit = 100000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -701,11 +701,39 @@ public sealed class PhotoDatabase
     }
 
     /// <summary>
-    /// Returns photos whose GPS position falls inside the given bounding box
-    /// (used by place-name search, e.g. "成都" → photos shot around Chengdu).
+    /// Returns only the three-level (country / province / city) place strings of GPS photos
+    /// that have a normalized address — the sidebar 地点 tree needs nothing else. Lightweight
+    /// compared to <see cref="GetGpsPhotosAsync"/> (which reads every column including BLOBs).
     /// </summary>
+    public async Task<List<(string Country, string Province, string City)>> GetGpsPlaceRowsAsync()
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT COALESCE(PlaceCountry, ''), COALESCE(PlaceProvince, ''), COALESCE(PlaceCity, '')
+                FROM Photos
+                WHERE IsMissing = 0
+                  AND GpsLatitude IS NOT NULL AND GpsLongitude IS NOT NULL
+                  AND PlaceCountry IS NOT NULL AND PlaceCountry != ''
+                """ + HiddenFolderExclusion + ";";
+            using var reader = cmd.ExecuteReader();
+            var result = new List<(string Country, string Province, string City)>();
+            while (reader.Read())
+            {
+                result.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+            }
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
     public async Task<List<PhotoRecord>> GetGpsPhotosInBoxAsync(double minLat, double maxLat, double minLon, double maxLon, int limit = 10000)
-    {        await _gate.WaitAsync();
+    {        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -745,7 +773,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetGpsPhotosWithoutPlaceAsync(string? source = null, int limit = 100000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -792,7 +820,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -827,7 +855,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -859,7 +887,7 @@ public sealed class PhotoDatabase
     /// <summary>Breakdown of resolved photos by source ("amap"/"osm"/"offline").</summary>
     public async Task<Dictionary<string, long>> CountGpsPhotosBySourceAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -885,7 +913,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosPendingPlaceNormalizationAsync(int limit = 100000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -913,6 +941,41 @@ public sealed class PhotoDatabase
         }
     }
 
+    /// <summary>
+    /// Returns photos that already have an LLM-normalized address (candidates for the
+    /// second-pass verification / error-correction pass). Includes the raw <c>GpsPlace</c> so the
+    /// verifier can re-check the normalized fields against the (correct) reverse-geocoded string.
+    /// </summary>
+    public async Task<List<PhotoRecord>> GetPhotosWithNormalizedAddressAsync(int limit = 100000)
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT * FROM Photos
+                WHERE IsMissing = 0
+                  AND GpsPlace IS NOT NULL AND GpsPlace != ''
+                  AND PlaceCountry IS NOT NULL AND PlaceCountry != ''
+                ORDER BY TakenAtUtc DESC, Id DESC
+                LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$limit", limit);
+            using var reader = cmd.ExecuteReader();
+            var result = new List<PhotoRecord>();
+            while (reader.Read())
+            {
+                result.Add(ReadPhoto(reader));
+            }
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Bulk-writes the LLM-normalized five-level address for the given photo ids.</summary>
     public async Task BulkSetPlaceAddressAsync(IReadOnlyList<(long Id, NormalizedAddress Address)> items)
     {
@@ -920,7 +983,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -965,7 +1028,7 @@ public sealed class PhotoDatabase
         {
             return result;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1002,7 +1065,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task UpdatePhotoPlaceAsync(long id, string place, string source, NormalizedAddress? address)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1052,7 +1115,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task ResetAllPlacesAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1071,7 +1134,29 @@ public sealed class PhotoDatabase
         }
     }
 
-    private static string? NullIfEmpty(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    /// <summary>Clears only the LLM-normalized five-level address (keeps the reverse-geocoded
+    /// <c>GpsPlace</c>), so the address normalization can be re-run from scratch.</summary>
+    public async Task ResetPlaceAddressesAsync()
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE Photos SET
+                    PlaceCountry = NULL, PlaceProvince = NULL, PlaceCity = NULL,
+                    PlaceDistrict = NULL, PlaceLandmark = NULL;
+                """;
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static string? NullIfEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? ReadNullable(System.Data.Common.DbDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
@@ -1079,7 +1164,7 @@ public sealed class PhotoDatabase
     /// <summary>Count of photos that already have a stored place name.</summary>
     public async Task<long> CountGpsPhotosWithPlaceAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1100,7 +1185,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<GpsStats> GetGpsStatsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1152,7 +1237,7 @@ public sealed class PhotoDatabase
     /// <summary>Counts photos that have an LLM-normalized address (PlaceCountry set).</summary>
     public async Task<long> CountPhotosWithNormalizedAddressAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1174,7 +1259,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetGpsPhotosByPlaceAsync(string keyword, int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1215,7 +1300,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<string>> GetPlaceSuggestionsAsync(string prefix, int limit = 10)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1259,7 +1344,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetResolvedAnchorsAsync(int limit = 200000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1293,7 +1378,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosWithoutAutoTagsAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1325,7 +1410,7 @@ public sealed class PhotoDatabase
 
     public async Task<long> GetPhotoCountAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1342,7 +1427,7 @@ public sealed class PhotoDatabase
     /// <summary>Count of existing (non-missing) photos in a folder including sub-folders.</summary>
     public async Task<long> CountPhotosByDirectoryPrefixAsync(string directoryPath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             string prefix = directoryPath.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
@@ -1372,7 +1457,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoFingerprint>> GetPhotoFingerprintsByDirectoryAsync(string directoryPath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1403,7 +1488,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosByDirectoryAsync(string directoryPath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1429,7 +1514,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosByDirectoryPrefixAsync(string directoryPath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             string prefix = directoryPath.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
@@ -1493,6 +1578,62 @@ public sealed class PhotoDatabase
     }
 
     /// <summary>
+    /// Count of existing photos matching the same filters as
+    /// <see cref="QueryPhotosAsync"/>. A lightweight COUNT keeps large libraries
+    /// fast (e.g. smart-album card counts) without materializing every row.
+    /// </summary>
+    public async Task<long> CountPhotosAsync(
+        string? directoryPath = null,
+        string? cameraModel = null,
+        int? ratingMin = null,
+        string? tag = null,
+        string? searchText = null,
+        string? dateFrom = null,
+        string? dateTo = null,
+        bool excludeHiddenFolders = true)
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT COUNT(*) FROM Photos
+                WHERE IsMissing = 0
+                  AND ($dir IS NULL OR DirectoryPath = $dir OR DirectoryPath LIKE $prefix)
+                  AND ($camera IS NULL OR CameraModel = $camera)
+                  AND ($rating IS NULL OR Rating >= $rating)
+                  AND ($tag IS NULL OR EXISTS(
+                        SELECT 1 FROM PhotoTags pt JOIN Tags t ON t.Id = pt.TagId
+                        WHERE pt.PhotoId = Photos.Id AND t.Name = $tag))
+                  AND ($search IS NULL OR $search = '' OR
+                        Photos.FileName LIKE '%' || $search || '%'
+                        OR Photos.CameraModel LIKE '%' || $search || '%'
+                        OR Photos.LensModel LIKE '%' || $search || '%'
+                        OR Photos.DirectoryPath LIKE '%' || $search || '%'
+                        OR Photos.TakenAtUtc LIKE $search || '%'
+                        OR EXISTS(SELECT 1 FROM PhotoTags pt2 JOIN Tags t2 ON t2.Id = pt2.TagId
+                                  WHERE pt2.PhotoId = Photos.Id AND t2.Name LIKE '%' || $search || '%'))
+                  AND ($dateFrom IS NULL OR substr(COALESCE(Photos.TakenAtUtc, Photos.FileModifiedUtc), 1, 10) >= $dateFrom)
+                  AND ($dateTo IS NULL OR substr(COALESCE(Photos.TakenAtUtc, Photos.FileModifiedUtc), 1, 10) <= $dateTo)
+                """ + (excludeHiddenFolders ? HiddenFolderExclusion : "") + ";";
+            cmd.Parameters.AddWithValue("$dir", (object?)directoryPath ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$prefix", (object?)(directoryPath?.TrimEnd('\\', '/') + Path.DirectorySeparatorChar + "%") ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$camera", (object?)cameraModel ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$rating", (object?)ratingMin ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$tag", (object?)tag ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$search", (object?)searchText ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$dateFrom", (object?)dateFrom ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$dateTo", (object?)dateTo ?? DBNull.Value);
+            return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Per-day photo histogram (one representative thumbnail per day) for the calendar view.
     /// Lightweight: groups by date so the whole month is summarized without loading every photo.
     /// </summary>
@@ -1538,7 +1679,7 @@ public sealed class PhotoDatabase
         bool includeCity,
         bool excludeHiddenFolders)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1629,7 +1770,7 @@ public sealed class PhotoDatabase
         int limit,
         bool excludeHiddenFolders)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1687,7 +1828,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<string>> GetSearchSuggestionsAsync(string query, int limit = 10)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1723,7 +1864,7 @@ public sealed class PhotoDatabase
     /// <summary>Distinct camera models with photo counts (most common first).</summary>
     public async Task<List<(string Model, long Count)>> GetCameraModelsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1758,7 +1899,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<Dictionary<string, long>> GetDirectoryCountsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1816,7 +1957,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task RenamePhotoPathAsync(string oldPath, string newPath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1841,7 +1982,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1866,14 +2007,65 @@ public sealed class PhotoDatabase
         }
     }
 
+    /// <summary>
+    /// Sets GPS coordinates AND the reverse-geocoded place data in one UPDATE. Used by the
+    /// GPS completion tool when an anchor's position (and its place text) is copied to a photo.
+    /// </summary>
+    public async Task BulkSetGpsWithPlaceAsync(
+        IReadOnlyList<(long Id, double Lat, double Lon, double? Alt, GpsPlaceData? Place)> items)
+    {
+        if (items.Count == 0)
+        {
+            return;
+        }
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var tx = conn.BeginTransaction();
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                UPDATE Photos SET GpsLatitude = $lat, GpsLongitude = $lon, GpsAltitude = $alt,
+                    GpsPlace = $place, GpsPlaceSource = $source,
+                    PlaceCountry = $country, PlaceProvince = $province, PlaceCity = $city,
+                    PlaceDistrict = $district, PlaceLandmark = $landmark
+                WHERE Id = $id;
+                """;
+            foreach (var (id, lat, lon, alt, place) in items)
+            {
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$lat", lat);
+                cmd.Parameters.AddWithValue("$lon", lon);
+                cmd.Parameters.AddWithValue("$alt", (object?)alt ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$place", (object?)place?.Place ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$source", (object?)place?.Source ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$country", (object?)place?.Country ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$province", (object?)place?.Province ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$city", (object?)place?.City ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$district", (object?)place?.District ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$landmark", (object?)place?.Landmark ?? DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task MarkMissingAsync(string path, bool missing = true)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = "UPDATE Photos SET IsMissing = $missing WHERE FilePath = $path;";
+            // COLLATE NOCASE: Windows paths are case-insensitive but the FilePath UNIQUE
+            // column is BINARY, so a watcher event with different casing must still hit the row.
+            cmd.CommandText = "UPDATE Photos SET IsMissing = $missing WHERE FilePath = $path COLLATE NOCASE;";
             cmd.Parameters.AddWithValue("$missing", missing ? 1 : 0);
             cmd.Parameters.AddWithValue("$path", path);
             cmd.ExecuteNonQuery();
@@ -1884,10 +2076,44 @@ public sealed class PhotoDatabase
         }
     }
 
+    /// <summary>
+    /// Bulk flags the given photo rows missing (or restores them when <paramref name="missing"/>
+    /// is false) in one transaction. Used when a folder scan detects many files gone at once
+    /// (e.g. the whole folder was deleted) — far cheaper than thousands of per-path UPDATEs.
+    /// </summary>
+    public async Task MarkMissingBatchAsync(IReadOnlyList<string> paths, bool missing)
+    {
+        if (paths.Count == 0)
+        {
+            return;
+        }
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var tx = conn.BeginTransaction();
+            using var cmd = conn.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = "UPDATE Photos SET IsMissing = $missing WHERE FilePath = $path;";
+            foreach (var path in paths)
+            {
+                cmd.Parameters.Clear();
+                cmd.Parameters.AddWithValue("$missing", missing ? 1 : 0);
+                cmd.Parameters.AddWithValue("$path", path);
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Deletes a photo row (used when the file itself is removed by the user).</summary>
     public async Task DeletePhotoAsync(string path)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1908,7 +2134,7 @@ public sealed class PhotoDatabase
     /// <summary>Runs <c>PRAGMA integrity_check</c> and returns its output ("ok" when healthy).</summary>
     public async Task<string> RunIntegrityCheckAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1933,7 +2159,7 @@ public sealed class PhotoDatabase
     /// <summary>Total and active (not missing) photo row counts.</summary>
     public async Task<(long Total, long Active)> GetTotalAndActivePhotoCountsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1959,7 +2185,7 @@ public sealed class PhotoDatabase
     /// <summary>Every photo row marked missing (file deleted externally), with its grid thumbnail path.</summary>
     public async Task<List<(string FilePath, string? ThumbnailCachePath)>> GetMissingPhotosAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -1979,10 +2205,81 @@ public sealed class PhotoDatabase
         }
     }
 
+    /// <summary>Lightweight existence data for every photo row, used by database maintenance.</summary>
+    public sealed record PhotoExistenceRow(string FilePath, bool IsMissing, string? ThumbnailCachePath);
+
+    /// <summary>
+    /// Returns (path, missing-flag, thumbnail) for every photo row — the minimal columns the
+    /// maintenance scan needs to decide which rows are truly redundant (file gone from disk)
+    /// regardless of whether the <c>IsMissing</c> flag was ever set. Never materializes the
+    /// wide <c>SELECT *</c> row.
+    /// </summary>
+    public async Task<List<PhotoExistenceRow>> GetPhotoExistenceRowsAsync()
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT FilePath, IsMissing, ThumbnailCachePath FROM Photos;";
+            using var reader = cmd.ExecuteReader();
+            var result = new List<PhotoExistenceRow>();
+            while (reader.Read())
+            {
+                result.Add(new PhotoExistenceRow(
+                    reader.GetString(0),
+                    reader.GetInt64(1) != 0,
+                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+            }
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Every row whose <see cref="PhotoRecord.FilePath"/> collides case-insensitively with
+    /// another row (Windows paths are case-insensitive but the FilePath UNIQUE column is
+    /// BINARY, so a file rewritten with a different case can leave two rows). Used by the
+    /// folder scan and database maintenance to de-duplicate. Groups are returned whole so
+    /// the caller can keep the freshest row per physical file. GROUP BY COLLATE NOCASE is
+    /// O(n log n), not the O(n²) a correlated EXISTS would be on tens of thousands of rows.
+    /// </summary>
+    public async Task<List<PhotoRecord>> GetCaseDuplicateRowsAsync()
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT * FROM Photos
+                WHERE FilePath COLLATE NOCASE IN (
+                    SELECT FilePath FROM Photos
+                    GROUP BY FilePath COLLATE NOCASE
+                    HAVING COUNT(*) > 1
+                );
+                """;
+            using var reader = cmd.ExecuteReader();
+            var result = new List<PhotoRecord>();
+            while (reader.Read())
+            {
+                result.Add(ReadPhoto(reader));
+            }
+            return result;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>All indexed photo file paths (used to detect orphaned thumbnail cache files).</summary>
     public async Task<List<string>> GetAllPhotoFilePathsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2005,7 +2302,7 @@ public sealed class PhotoDatabase
     /// <summary>Counts tag/face links whose referenced photo row no longer exists.</summary>
     public async Task<(long Tags, long Faces)> CountOrphanLinksAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2031,7 +2328,7 @@ public sealed class PhotoDatabase
     /// <summary>Deletes tag/face links whose referenced photo row no longer exists. Returns the removed counts.</summary>
     public async Task<(long Tags, long Faces)> DeleteOrphanLinksAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             long orphanTags, orphanFaces;
@@ -2075,7 +2372,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task ResetLibraryAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2108,7 +2405,7 @@ public sealed class PhotoDatabase
         {
             return 0;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2147,7 +2444,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2182,7 +2479,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2212,7 +2509,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosPendingVisionAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2239,7 +2536,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetBlurryPhotosAsync(double maxBlurScore, int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2264,7 +2561,7 @@ public sealed class PhotoDatabase
     /// <summary>Count of existing photos that have a stored blur score.</summary>
     public async Task<long> CountAnalyzedPhotosAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2291,7 +2588,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2336,7 +2633,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosPendingDeepAnalysisAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2363,7 +2660,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosPendingAestheticAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2391,7 +2688,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosPendingClipEmbeddingAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2415,7 +2712,7 @@ public sealed class PhotoDatabase
     /// <summary>Low-scoring (aesthetically weak / "无意义") photos, worst first.</summary>
     public async Task<List<PhotoRecord>> GetLowAestheticPhotosAsync(double maxScore, int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2437,10 +2734,28 @@ public sealed class PhotoDatabase
         }
     }
 
+    /// <summary>Count of aesthetically weak ("无意义") photos, for the AI-page coverage card.</summary>
+    public async Task<long> CountLowAestheticPhotosAsync(double maxScore)
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM Photos WHERE IsMissing = 0 AND AestheticScore IS NOT NULL AND AestheticScore <= $max;";
+            cmd.Parameters.AddWithValue("$max", maxScore);
+            return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Monochrome (B/W or sepia) photos, newest first.</summary>
     public async Task<List<PhotoRecord>> GetMonoPhotosAsync(int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2461,10 +2776,27 @@ public sealed class PhotoDatabase
         }
     }
 
+    /// <summary>Count of monochrome photos, for the AI-page coverage card.</summary>
+    public async Task<long> CountMonoPhotosAsync()
+    {
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
+        try
+        {
+            using var conn = Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM Photos WHERE IsMissing = 0 AND IsMono = 1;";
+            return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>All photos that have a MobileCLIP embedding, for in-memory similarity search.</summary>
     public async Task<List<(long Id, byte[] Embedding)>> GetAllClipEmbeddingsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2487,7 +2819,7 @@ public sealed class PhotoDatabase
     /// <summary>Count of existing photos that have had the deep analysis pass run.</summary>
     public async Task<long> CountDeepAnalyzedPhotosAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2508,7 +2840,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetLowQualityPhotosAsync(double maxBlur, double maxAesthetic, int limit = 100000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2548,7 +2880,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2583,7 +2915,7 @@ public sealed class PhotoDatabase
     /// <summary>Deletes every stored face (used when re-running face analysis from scratch).</summary>
     public async Task DeleteAllFacesAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2600,7 +2932,7 @@ public sealed class PhotoDatabase
     /// <summary>Returns every stored face with its embedding (all photos).</summary>
     public async Task<List<FaceRow>> GetAllFacesAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2635,7 +2967,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2665,7 +2997,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PersonClusterInfo>> GetPersonClustersAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2708,7 +3040,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<PhotoRecord>> GetPhotosByPersonAsync(long personId, int limit = 10000)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2742,7 +3074,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task RenamePersonAsync(long personId, string? name)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2769,7 +3101,7 @@ public sealed class PhotoDatabase
         {
             return;
         }
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2791,7 +3123,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task DeletePersonAsync(long personId)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2808,7 +3140,7 @@ public sealed class PhotoDatabase
 
     public async Task<long> UpsertFolderAsync(FolderRecord f)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2837,7 +3169,7 @@ public sealed class PhotoDatabase
 
     public async Task<List<FolderRecord>> GetFoldersAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2873,7 +3205,7 @@ public sealed class PhotoDatabase
 
     public async Task SetFolderHiddenAsync(string path, bool hidden)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2892,7 +3224,7 @@ public sealed class PhotoDatabase
     /// <summary>Distinct directories that contain indexed photos (used to self-heal folder records).</summary>
     public async Task<List<string>> GetPhotoDirectoriesAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2919,7 +3251,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task<List<string>> RemoveFolderAsync(string path)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             string prefix = path.TrimEnd('\\', '/') + "\\%";
@@ -2965,7 +3297,7 @@ public sealed class PhotoDatabase
 
     public async Task<long> UpsertSmartAlbumAsync(SmartAlbum album)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -2991,7 +3323,7 @@ public sealed class PhotoDatabase
 
     public async Task<List<SmartAlbum>> GetSmartAlbumsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3019,7 +3351,7 @@ public sealed class PhotoDatabase
 
     public async Task DeleteSmartAlbumAsync(long id)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3036,7 +3368,7 @@ public sealed class PhotoDatabase
 
     public async Task AddTagAsync(long photoId, string name, bool isAuto)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3064,7 +3396,7 @@ public sealed class PhotoDatabase
 
     public async Task RemoveTagAsync(long photoId, string name)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3085,7 +3417,7 @@ public sealed class PhotoDatabase
 
     public async Task<List<TagRecord>> GetPhotoTagsAsync(long photoId)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3112,7 +3444,7 @@ public sealed class PhotoDatabase
 
     public async Task<List<TagRecord>> GetTagsWithCountsAsync(bool isAuto)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3146,7 +3478,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task DeleteAllAutoTagsAsync()
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();
@@ -3170,7 +3502,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task BackupToAsync(string destinationPath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             await Task.Run(() =>
@@ -3201,7 +3533,7 @@ public sealed class PhotoDatabase
     /// </summary>
     public async Task RestoreFromAsync(string sourcePath)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             await Task.Run(() =>
@@ -3252,7 +3584,7 @@ public sealed class PhotoDatabase
 
     private async Task ExecuteAsync(Action<SqliteConnection> action)
     {
-        await _gate.WaitAsync();
+        await Task.Run(() => _gate.Wait()).ConfigureAwait(false);
         try
         {
             using var conn = Open();

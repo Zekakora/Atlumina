@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Numerics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Composition;
@@ -46,9 +48,6 @@ public sealed partial class HomePage : Page
         ViewModel.Photos.CollectionChanged += OnPhotosChanged;
         ViewModel.PhotosLoaded += OnPhotosLoaded;
 
-        // Mirror the ruler's hover fade to the white scrim layer below the photo content.
-        TimelineRuler.ActivationChanged += OnRulerActivationChanged;
-
         // Calendar day click → drill into that day's photos.
         CalendarControl.DayInvoked += (_, day) => ViewModel.DrillToDay(day);
 
@@ -88,10 +87,10 @@ public sealed partial class HomePage : Page
         try
         {
             await ViewModel.InitializeAsync();
-            // Photos are cached across navigation; refresh place addresses written by the
-            // out-of-band LLM normalization pass so the right-panel location shows immediately.
-            await ViewModel.RefreshPlaceAddressesAsync();
-            UpdateRulerDays();
+            // Photos are cached across navigation and the AI-page passes that rewrite place
+            // addresses already push their updates into the cached records (RefreshPlaceAddressesAsync),
+            // so re-querying all photos on every home re-entry is redundant and costs a 万级
+            // ID IN 查询 on the UI thread. The ruler days are (re)built by PhotosLoaded/CollectionChanged.
         }
         catch (Exception ex)
         {
@@ -137,6 +136,12 @@ public sealed partial class HomePage : Page
                 break;
             case nameof(ViewModel.SelectedPhoto):
                 PushMiniMapMarker();
+                break;
+            case nameof(ViewModel.HasScanFailures):
+                ScanSummaryIcon.Glyph = ViewModel.HasScanFailures ? "\uE7BA" : "\uE73E";
+                ScanSummaryIcon.Foreground = ViewModel.HasScanFailures
+                    ? ThemeBrush.Resolve(this, "SystemFillColorCautionBrush")
+                    : ThemeBrush.Resolve(this, "SystemFillColorSuccessBrush");
                 break;
         }
     }
@@ -367,22 +372,6 @@ public sealed partial class HomePage : Page
         TimelineRuler.JumpToIndex = ScrollToPhoto;
     }
 
-    /// <summary>Mirrors the ruler's hover fade to the white scrim layer below the photo content.</summary>
-    private void OnRulerActivationChanged(object? sender, bool active)
-    {
-        var anim = new DoubleAnimation
-        {
-            To = active ? 1 : 0,
-            Duration = TimeSpan.FromMilliseconds(140),
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-        };
-        Storyboard.SetTarget(anim, RulerScrim);
-        Storyboard.SetTargetProperty(anim, "Opacity");
-        var sb = new Storyboard();
-        sb.Children.Add(anim);
-        sb.Begin();
-    }
-
     /// <summary>Scrolls the adaptive grid so the row containing the photo at the given index is at the top.</summary>
     private void ScrollToPhoto(int index)
     {
@@ -589,9 +578,99 @@ public sealed partial class HomePage : Page
 
     private void GridTile_OnTapped(object sender, TappedRoutedEventArgs e)
     {
+        if (FindPhotoItem(sender as DependencyObject) is not { } item)
+        {
+            return;
+        }
+        bool ctrl = IsModifierKeyDown(Windows.System.VirtualKey.Control);
+        bool shift = IsModifierKeyDown(Windows.System.VirtualKey.Shift);
+        if (shift && !ctrl)
+        {
+            ViewModel.SelectRangeTo(item);
+        }
+        else if (ctrl)
+        {
+            ViewModel.ToggleSelection(item);
+        }
+        else
+        {
+            ViewModel.SelectSingle(item);
+        }
+        // 任何左键点击都让右栏预览跟随到当前照片。
+        ViewModel.SelectPhoto(item);
+    }
+
+    /// <summary>Right-click: if the photo isn't already part of the selection, collapse the
+    /// selection to just it (so the context-menu action targets a sensible set), then let the
+    /// framework show the <see cref="GridTileTemplate"/> ContextFlyout.</summary>
+    private void GridTile_OnRightTapped(object sender, RightTappedRoutedEventArgs e)
+    {
         if (FindPhotoItem(sender as DependencyObject) is { } item)
         {
-            ViewModel.SelectPhoto(item);
+            ViewModel.EnsureContextSelection(item);
+        }
+    }
+
+    /// <summary>Right-click context-menu action: re-resolves the location of the whole selection.</summary>
+    private async void RefreshLocations_OnClick(object sender, RoutedEventArgs e)
+    {
+        await ViewModel.RefreshLocationsAsync();
+    }
+
+    /// <summary>Right-click context-menu action: batch reverse-geocode + normalize with 150 m
+    /// neighbor reuse (reuses a nearby photo's already-resolved place instead of hitting the network).</summary>
+    private async void RefreshLocationsReuse_OnClick(object sender, RoutedEventArgs e)
+    {
+        await ViewModel.RefreshLocationsReuseAsync();
+    }
+
+    /// <summary>Right-click context-menu action: opens File Explorer with the right-clicked photo selected.</summary>
+    private void RevealInExplorer_OnClick(object sender, RoutedEventArgs e)
+    {
+        var item = (sender as FrameworkElement)?.DataContext as PhotoGridItem
+                   ?? ViewModel.SelectedPhotos.LastOrDefault();
+        if (item is null)
+        {
+            return;
+        }
+        RevealInExplorer(item.Photo.FilePath);
+    }
+
+    /// <summary>用 <c>explorer.exe /select,"path"</c> 在资源管理器中定位并选中文件（文件不存在时静默忽略）。</summary>
+    private static void RevealInExplorer(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{filePath}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch
+        {
+            // 资源管理器启动失败时静默忽略。
+        }
+    }
+
+    private static bool IsModifierKeyDown(Windows.System.VirtualKey key) =>
+        Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(key)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+    /// <summary>Ctrl+A selects every photo in the grid (when the grid view is active).</summary>
+    private void HomePage_OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (IsModifierKeyDown(Windows.System.VirtualKey.Control)
+            && e.Key == Windows.System.VirtualKey.A
+            && ViewModel.IsPhotoView)
+        {
+            ViewModel.SelectAll();
+            e.Handled = true;
         }
     }
 

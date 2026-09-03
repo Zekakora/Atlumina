@@ -189,18 +189,35 @@ public partial class App : Application
         // Restore persisted settings (right-panel field toggles etc.).
         await Services.GetRequiredService<AppState>().LoadAsync();
 
-        // Self-heal: register folders for photos whose import was interrupted before the
-        // folder row was written, so they show up in Settings and get watched again.
-        await Services.GetRequiredService<LibraryService>().RepairFolderRecordsAsync();
+        // 自愈与监听恢复不阻塞首帧：DB schema 就绪即可让首页开始查询，文件夹自愈和
+        // 逐个 WatchFolder 在后台继续（完成后首页下次刷新即可看到）。
+        _ = RunPostInitAsync();
+    }
 
-        // Restore folder watching for folders that were watched previously.
-        var watcher = Services.GetRequiredService<FolderWatcherService>();
-        foreach (var folder in await db.GetFoldersAsync())
+    /// <summary>
+    /// Best-effort post-init work that would otherwise delay the first paint:
+    /// registers folders for photos whose import was interrupted before the folder row
+    /// was written, and restores folder watching for previously watched folders.
+    /// </summary>
+    private static async Task RunPostInitAsync()
+    {
+        try
         {
-            if (folder.IsWatched && Directory.Exists(folder.Path))
+            var db = Services.GetRequiredService<PhotoDatabase>();
+            await Services.GetRequiredService<LibraryService>().RepairFolderRecordsAsync();
+
+            var watcher = Services.GetRequiredService<FolderWatcherService>();
+            foreach (var folder in await db.GetFoldersAsync())
             {
-                watcher.WatchFolder(folder.Path);
+                if (folder.IsWatched && Directory.Exists(folder.Path))
+                {
+                    watcher.WatchFolder(folder.Path);
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex.ToString());
         }
     }
 }

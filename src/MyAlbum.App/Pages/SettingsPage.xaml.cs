@@ -16,6 +16,8 @@ public sealed partial class SettingsPage : Page
     public SettingsPage()
     {
         InitializeComponent();
+        // 切走再切回不重建页面：避免每次都重新解析大 XAML（SettingsViewModel 为单例）。
+        NavigationCacheMode = NavigationCacheMode.Required;
         ViewModel = App.Services.GetRequiredService<SettingsViewModel>();
     }
 

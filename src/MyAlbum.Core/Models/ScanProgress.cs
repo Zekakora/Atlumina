@@ -21,4 +21,12 @@ public sealed class ScanResult
     public int Skipped { get; set; }
     public int Failed { get; set; }
     public int MarkedMissing { get; set; }
+
+    /// <summary>Case-insensitive duplicate rows (same physical file, different path casing)
+    /// removed during the scan so the grid stops double-counting.</summary>
+    public int RemovedDuplicates { get; set; }
+
+    /// <summary>Per-file failure details ("文件名：原因") collected during the scan, so a
+    /// refresh that reports failures can tell the user exactly which file failed and why.</summary>
+    public List<string> FailedDetails { get; } = new();
 }

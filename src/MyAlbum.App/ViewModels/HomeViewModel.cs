@@ -34,6 +34,7 @@ public partial class HomeViewModel : ObservableObject
     private readonly AppState _appState;
     private readonly FolderWatcherService _watcher;
     private readonly ReverseGeocodeService _geocoder;
+    private readonly GpsPlaceService _placeService;
     private readonly AddressNormalizeService _addressNormalizer;
 
     public ObservableCollection<FolderTreeNode> FolderTree { get; } = new();
@@ -298,6 +299,8 @@ public partial class HomeViewModel : ObservableObject
 
     public IAsyncRelayCommand RefreshCommand { get; }
     public IAsyncRelayCommand RefreshLocationCommand { get; }
+    public IAsyncRelayCommand RefreshLocationsCommand { get; }
+    public IAsyncRelayCommand RefreshLocationsReuseCommand { get; }
     public IRelayCommand SetRatingCommand { get; }
     public IRelayCommand SetViewCommand { get; }
     public IRelayCommand ClearFiltersCommand { get; }
@@ -324,6 +327,13 @@ public partial class HomeViewModel : ObservableObject
     private CancellationTokenSource? _selectDebounce;
     private CancellationTokenSource? _thumbGenCts;
 
+    // ---- 多选（Ctrl / Shift / Ctrl+A）----
+    private readonly HashSet<PhotoGridItem> _selectedSet = new();
+    private PhotoGridItem? _selectionAnchor;
+
+    /// <summary>The current multi-selection (in display order). Drives the context-menu actions.</summary>
+    public ObservableCollection<PhotoGridItem> SelectedPhotos { get; } = new();
+
     public LibraryFilter CurrentFilter
     {
         get
@@ -346,7 +356,7 @@ public partial class HomeViewModel : ObservableObject
         }
     }
 
-    public HomeViewModel(PhotoDatabase db, ThumbnailService thumbs, ExifWriterService exif, LibraryService library, AppState appState, FolderWatcherService watcher, ReverseGeocodeService geocoder, AddressNormalizeService addressNormalizer)
+    public HomeViewModel(PhotoDatabase db, ThumbnailService thumbs, ExifWriterService exif, LibraryService library, AppState appState, FolderWatcherService watcher, ReverseGeocodeService geocoder, GpsPlaceService placeService, AddressNormalizeService addressNormalizer)
     {
         _db = db;
         _thumbs = thumbs;
@@ -355,10 +365,13 @@ public partial class HomeViewModel : ObservableObject
         _appState = appState;
         _watcher = watcher;
         _geocoder = geocoder;
+        _placeService = placeService;
         _addressNormalizer = addressNormalizer;
         _watcher.LibraryChanged += OnLibraryChanged;
         RefreshCommand = new AsyncRelayCommand(RefreshAndScanAsync, () => !IsScanning);
         RefreshLocationCommand = new AsyncRelayCommand(RefreshLocationAsync, () => HasGps && !IsRefreshingLocation);
+        RefreshLocationsCommand = new AsyncRelayCommand(RefreshLocationsAsync, () => (SelectedPhotos.Count > 0 || SelectedPhoto is not null) && !IsRefreshingLocation);
+        RefreshLocationsReuseCommand = new AsyncRelayCommand(RefreshLocationsReuseAsync, () => (SelectedPhotos.Count > 0 || SelectedPhoto is not null) && !IsRefreshingLocation);
         SetRatingCommand = new RelayCommand<object?>(p => SetRating(p));
         SetViewCommand = new RelayCommand<object?>(v => ViewMode = ParseViewMode(v));
         ClearFiltersCommand = new RelayCommand(ClearFilters);
@@ -522,6 +535,122 @@ public partial class HomeViewModel : ObservableObject
                 }
             });
         }, token, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    // ---- 多选（Ctrl 切换 / Shift 范围 / Ctrl+A 全选）----
+
+    /// <summary>Selects exactly this photo, clearing the rest of the selection.</summary>
+    public void SelectSingle(PhotoGridItem item)
+    {
+        foreach (var s in _selectedSet)
+        {
+            if (!ReferenceEquals(s, item)) s.IsSelected = false;
+        }
+        _selectedSet.Clear();
+        SelectedPhotos.Clear();
+        item.IsSelected = true;
+        _selectedSet.Add(item);
+        SelectedPhotos.Add(item);
+        _selectionAnchor = item;
+        RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Toggles a photo in/out of the selection (Ctrl+click).</summary>
+    public void ToggleSelection(PhotoGridItem item)
+    {
+        if (_selectedSet.Contains(item))
+        {
+            _selectedSet.Remove(item);
+            item.IsSelected = false;
+            RemoveFromSelectedPhotos(item);
+        }
+        else
+        {
+            item.IsSelected = true;
+            _selectedSet.Add(item);
+            SelectedPhotos.Add(item);
+        }
+        _selectionAnchor ??= item;
+        RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Selects a contiguous range from the anchor to <paramref name="item"/> (Shift+click).</summary>
+    public void SelectRangeTo(PhotoGridItem item)
+    {
+        PhotoGridItem anchor = _selectionAnchor ?? item;
+        int a = Photos.IndexOf(anchor);
+        int b = Photos.IndexOf(item);
+        if (a < 0) a = 0;
+        if (b < 0) b = Photos.Count - 1;
+        int lo = Math.Min(a, b);
+        int hi = Math.Max(a, b);
+
+        foreach (var s in _selectedSet) s.IsSelected = false;
+        _selectedSet.Clear();
+        SelectedPhotos.Clear();
+        for (int i = lo; i <= hi; i++)
+        {
+            var it = Photos[i];
+            it.IsSelected = true;
+            _selectedSet.Add(it);
+            SelectedPhotos.Add(it);
+        }
+        _selectionAnchor = anchor;
+        RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Selects every photo currently shown (Ctrl+A).</summary>
+    public void SelectAll()
+    {
+        _selectedSet.Clear();
+        SelectedPhotos.Clear();
+        foreach (var it in Photos)
+        {
+            it.IsSelected = true;
+            _selectedSet.Add(it);
+            SelectedPhotos.Add(it);
+        }
+        RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Clears the whole selection.</summary>
+    public void ClearSelection()
+    {
+        foreach (var s in _selectedSet) s.IsSelected = false;
+        _selectedSet.Clear();
+        SelectedPhotos.Clear();
+        _selectionAnchor = null;
+        RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Ensures the right-clicked photo participates in the context-menu action: if it is not
+    /// already part of the selection, the selection collapses to just it (standard Explorer
+    /// behaviour); if it is, the existing multi-selection is preserved.
+    /// </summary>
+    public void EnsureContextSelection(PhotoGridItem item)
+    {
+        if (!_selectedSet.Contains(item))
+        {
+            SelectSingle(item);
+        }
+    }
+
+    private void RemoveFromSelectedPhotos(PhotoGridItem item)
+    {
+        for (int i = 0; i < SelectedPhotos.Count; i++)
+        {
+            if (ReferenceEquals(SelectedPhotos[i], item))
+            {
+                SelectedPhotos.RemoveAt(i);
+                break;
+            }
+        }
     }
 
     /// <summary>Ctrl + mouse wheel zoom: adjusts row height and switches day / month / year grouping.
@@ -820,9 +949,11 @@ public partial class HomeViewModel : ObservableObject
             // Only refresh the preview panel — do NOT rebuild the photo grid (ApplyFilterAsync
             // would reset the scroll position and lose the user's current place in the grid).
             await LoadPreviewAsync(SelectedPhoto);
-            StatusText = _addressNormalizer.IsConfigured
-                ? "已刷新该照片位置（反解 + AI 规范）。"
-                : "已刷新该照片位置（未配置大模型，已跳过 AI 规范）。";
+            StatusText = !_addressNormalizer.IsConfigured
+                ? "已刷新该照片位置（未配置大模型，已跳过 AI 规范）。"
+                : (addr is null
+                    ? "已反解位置，但 AI 规范未返回结果（请检查大模型配置/网络）。"
+                    : "已刷新该照片位置（反解 + AI 规范）。");
         }
         catch (Exception ex)
         {
@@ -831,6 +962,224 @@ public partial class HomeViewModel : ObservableObject
         finally
         {
             IsRefreshingLocation = false;
+        }
+    }
+
+    /// <summary>
+    /// Batch counterpart of <see cref="RefreshLocationAsync"/>: re-resolves the location of
+    /// every photo in the current multi-selection (or the single selected photo when nothing
+    /// is multi-selected). The reverse-geocode step runs in parallel at the settings' geocode
+    /// concurrency, and the LLM normalization reuses <see cref="AddressNormalizeService"/>'
+    /// exact batching rules (distinct names → batches → parallel at the settings' LLM
+    /// concurrency). Results are bulk-written and the in-memory records updated.
+    /// </summary>
+    public async Task RefreshLocationsAsync()
+    {
+        var targets = SelectedPhotos.Count > 0
+            ? SelectedPhotos.ToList()
+            : (SelectedPhoto is not null ? new List<PhotoGridItem> { SelectedPhoto } : new List<PhotoGridItem>());
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        IsRefreshingLocation = true;
+        try
+        {
+            int skip = 0;
+            int geoTotal = targets.Count(t => t.Photo.GpsLatitude is not null && t.Photo.GpsLongitude is not null);
+            int geoDone = 0;
+            long lastReport = 0;
+            var geocoded = new ConcurrentBag<(PhotoRecord Photo, string Place, string Source)>();
+
+            // Step 1: reverse-geocode every GPS photo, parallel at the settings' geocode concurrency.
+            await Parallel.ForEachAsync(targets, new ParallelOptions
+            {
+                MaxDegreeOfParallelism = ProcessingConfig.GeocodeParallelism,
+            }, async (item, ct) =>
+            {
+                var photo = item.Photo;
+                if (photo.GpsLatitude is not { } lat || photo.GpsLongitude is not { } lon)
+                {
+                    Interlocked.Increment(ref skip);
+                    return;
+                }
+                try
+                {
+                    var result = await _geocoder.ResolveAsync(lat, lon, ct);
+                    if (!string.IsNullOrWhiteSpace(result.Place))
+                    {
+                        geocoded.Add((photo, result.Place, result.Source ?? "osm"));
+                    }
+                    else
+                    {
+                        Interlocked.Increment(ref skip);
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    Interlocked.Increment(ref skip);
+                }
+                finally
+                {
+                    int d = Interlocked.Increment(ref geoDone);
+                    long now = Environment.TickCount64;
+                    if (geoTotal > 0 && (now - lastReport >= 80 || d == geoTotal))
+                    {
+                        lastReport = now;
+                        App.DispatcherQueue.TryEnqueue(() =>
+                        {
+                            LocationProgress = geoTotal > 0 ? (double)d / geoTotal : 1;
+                            LocationProgressText = $"正在反解位置 {d}/{geoTotal}";
+                        });
+                    }
+                }
+            });
+
+            // Persist the reverse-geocoded places and update the in-memory records.
+            var placeWrites = geocoded
+                .Select(g => (g.Photo.Id, g.Place, g.Source))
+                .ToList();
+            await _db.BulkSetGpsPlaceAsync(placeWrites);
+            foreach (var g in geocoded)
+            {
+                g.Photo.GpsPlace = g.Place;
+                g.Photo.GpsPlaceSource = g.Source;
+            }
+            int resolved = placeWrites.Count;
+
+            // Step 2: 五级 LLM 规范（对刚反解出 GpsPlace 的照片重新推导五级地址）。
+            int normalized = 0, normSkipped = 0;
+            if (_addressNormalizer.IsConfigured && placeWrites.Count > 0)
+            {
+                var prog = new Progress<(int Done, int Total, string File)>(p =>
+                {
+                    App.DispatcherQueue.TryEnqueue(() =>
+                    {
+                        LocationProgress = p.Total > 0 ? (double)p.Done / p.Total : 1;
+                        LocationProgressText = $"正在 AI 五级规范 {p.Done}/{p.Total}";
+                    });
+                });
+                var res = await _addressNormalizer.NormalizePhotosAsync(targets.Select(t => t.Photo).ToList(), prog);
+                normalized = res.Resolved;
+                normSkipped = res.Skipped;
+            }
+
+            // Refresh the right-panel preview if the focused photo was among the refreshed ones.
+            if (SelectedPhoto is not null && targets.Contains(SelectedPhoto))
+            {
+                await LoadPreviewAsync(SelectedPhoto);
+            }
+
+            var locMsg = _addressNormalizer.IsConfigured
+                ? $"已反解 {resolved} 张；AI 五级规范 {normalized} 张"
+                  + (normSkipped > 0 ? $"，{normSkipped} 张未给出规范结果" : "。")
+                : "未配置大模型，AI 规范已跳过。";
+            StatusText = $"已重新解析位置：{locMsg}" + (skip > 0 ? $" 另跳过 {skip} 张（无 GPS）。" : "");
+        }
+        catch (Exception ex)
+        {
+            StatusText = "刷新位置失败：" + ex.Message;
+        }
+        finally
+        {
+            IsRefreshingLocation = false;
+            LocationProgress = 0;
+            LocationProgressText = "";
+            RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// Right-click "批量反解+解析（相似复用）": like <see cref="RefreshLocationsAsync"/> but the
+    /// reverse-geocode step first checks whether any already-resolved photo (the 150 m anchor pool)
+    /// shares the same spot — if so it reuses that place name instead of hitting the network.
+    /// Saves traffic/time when re-resolving a burst of nearby shots (e.g. a walk in one street).
+    /// </summary>
+    public async Task RefreshLocationsReuseAsync()
+    {
+        var targets = SelectedPhotos.Count > 0
+            ? SelectedPhotos.ToList()
+            : (SelectedPhoto is not null ? new List<PhotoGridItem> { SelectedPhoto } : new List<PhotoGridItem>());
+        if (targets.Count == 0)
+        {
+            return;
+        }
+
+        IsRefreshingLocation = true;
+        try
+        {
+            // Step 1: reuse-aware reverse geocode of the whole selection (150 m anchor reuse).
+            var progress = new Progress<(int Done, int Total, string File)>(p =>
+            {
+                App.DispatcherQueue.TryEnqueue(() =>
+                {
+                    LocationProgress = p.Total > 0 ? (double)p.Done / p.Total : 1;
+                    LocationProgressText = $"正在反解位置（相似复用）{p.Done}/{p.Total}";
+                });
+            });
+            var resolved = await _placeService.ResolvePhotosAsync(
+                targets.Select(t => t.Photo).ToList(), progress, CancellationToken.None);
+
+            // Persist the reverse-geocoded places and update the in-memory records.
+            var placeWrites = resolved
+                .Select(r => (r.Photo.Id, r.Place, r.Source))
+                .ToList();
+            await _db.BulkSetGpsPlaceAsync(placeWrites);
+            foreach (var r in resolved)
+            {
+                r.Photo.GpsPlace = r.Place;
+                r.Photo.GpsPlaceSource = r.Source;
+            }
+            int resolvedCount = placeWrites.Count;
+            int reuseCount = resolved.Count(r => r.Source == "reuse");
+            int skip = targets.Count - resolvedCount;
+
+            // Step 2: 五级 LLM 规范（对刚反解出 GpsPlace 的照片重新推导五级地址）。
+            int normalized = 0, normSkipped = 0;
+            if (_addressNormalizer.IsConfigured && placeWrites.Count > 0)
+            {
+                var normProg = new Progress<(int Done, int Total, string File)>(p =>
+                {
+                    App.DispatcherQueue.TryEnqueue(() =>
+                    {
+                        LocationProgress = p.Total > 0 ? (double)p.Done / p.Total : 1;
+                        LocationProgressText = $"正在 AI 五级规范 {p.Done}/{p.Total}";
+                    });
+                });
+                var res = await _addressNormalizer.NormalizePhotosAsync(targets.Select(t => t.Photo).ToList(), normProg);
+                normalized = res.Resolved;
+                normSkipped = res.Skipped;
+            }
+
+            // Refresh the right-panel preview if the focused photo was among the refreshed ones.
+            if (SelectedPhoto is not null && targets.Contains(SelectedPhoto))
+            {
+                await LoadPreviewAsync(SelectedPhoto);
+            }
+
+            var locMsg = _addressNormalizer.IsConfigured
+                ? $"已反解 {resolvedCount} 张（含相似复用 {reuseCount} 张）；AI 五级规范 {normalized} 张"
+                  + (normSkipped > 0 ? $"，{normSkipped} 张未给出规范结果" : "。")
+                : $"已反解 {resolvedCount} 张（含相似复用 {reuseCount} 张）。未配置大模型，AI 规范已跳过。";
+            StatusText = $"已重新解析位置（相似复用）：{locMsg}" + (skip > 0 ? $" 另跳过 {skip} 张（无 GPS 或反解失败）。" : "");
+        }
+        catch (Exception ex)
+        {
+            StatusText = "刷新位置（相似复用）失败：" + ex.Message;
+        }
+        finally
+        {
+            IsRefreshingLocation = false;
+            LocationProgress = 0;
+            LocationProgressText = "";
+            RefreshLocationsCommand.NotifyCanExecuteChanged();
+        RefreshLocationsReuseCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -986,6 +1335,29 @@ public partial class HomeViewModel : ObservableObject
     [ObservableProperty]
     public partial string ScanSummary { get; set; } = "";
 
+    /// <summary>True when the last refresh-scan reported failures (drive the warning icon in the toolbar).</summary>
+    [ObservableProperty]
+    public partial bool HasScanFailures { get; set; }
+
+    /// <summary>Per-file failure details from the last refresh-scan ("文件名：原因"), shown as a tooltip.</summary>
+    [ObservableProperty]
+    public partial string ScanFailureText { get; set; } = "";
+
+    /// <summary>Tooltip for the summary icon/text — non-null only when the last refresh had failures.</summary>
+    public string? ScanFailureToolTip => HasScanFailures ? ScanFailureText : null;
+
+    partial void OnHasScanFailuresChanged(bool value) => OnPropertyChanged(nameof(ScanFailureToolTip));
+
+    partial void OnScanFailureTextChanged(string value) => OnPropertyChanged(nameof(ScanFailureToolTip));
+
+    /// <summary>Progress (0..1) of the right-click "重新获取地理位置及规范" batch action.</summary>
+    [ObservableProperty]
+    public partial double LocationProgress { get; set; }
+
+    /// <summary>Status text shown next to <see cref="LocationProgress"/> during the batch action.</summary>
+    [ObservableProperty]
+    public partial string LocationProgressText { get; set; } = "";
+
     /// <summary>True when a refresh-scan summary should be shown (transient InfoBar).</summary>
     public bool HasScanSummary => !string.IsNullOrWhiteSpace(ScanSummary);
 
@@ -1007,11 +1379,13 @@ public partial class HomeViewModel : ObservableObject
         IsScanning = true;
         ScanProgress = 0;
         ScanSummary = "";
+        HasScanFailures = false;
         try
         {
             var folders = (await _db.GetFoldersAsync()).Where(f => !f.IsHidden).ToList();
             int total = folders.Count;
-            int added = 0, removed = 0, failed = 0;
+            int added = 0, removed = 0, failed = 0, dupes = 0;
+            var failureDetails = new ConcurrentBag<string>();
 
             if (total == 0)
             {
@@ -1047,11 +1421,8 @@ public partial class HomeViewModel : ObservableObject
                         new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Math.Min(total, budget)) },
                         async (folder, ct) =>
                         {
-                            if (!Directory.Exists(folder.Path))
-                            {
-                                states[folder.Path] = (0, 0);
-                                return;
-                            }
+                            // 文件夹已从磁盘删除时不跳过：ScanFolderAsync 会对该目录下所有已索引
+                            // 行批量标记缺失，否则这些记录会永远残留在库里（冗余扫描也发现不了）。
                             var progress = new Progress<ScanProgress>(p => states[folder.Path] = (p.TotalFiles, p.Processed));
                             try
                             {
@@ -1059,10 +1430,16 @@ public partial class HomeViewModel : ObservableObject
                                 Interlocked.Add(ref added, r.Indexed);
                                 Interlocked.Add(ref removed, r.MarkedMissing);
                                 Interlocked.Add(ref failed, r.Failed);
+                                Interlocked.Add(ref dupes, r.RemovedDuplicates);
+                                foreach (var detail in r.FailedDetails)
+                                {
+                                    failureDetails.Add(detail);
+                                }
                             }
-                            catch
+                            catch (Exception ex)
                             {
                                 Interlocked.Increment(ref failed);
+                                failureDetails.Add($"[{Path.GetFileName(folder.Path.TrimEnd('\\', '/'))}] {ex.GetType().Name}：{ex.Message}");
                             }
                         });
                 }
@@ -1077,10 +1454,17 @@ public partial class HomeViewModel : ObservableObject
             var parts = new List<string>();
             if (added > 0) parts.Add($"新增 {added}");
             if (removed > 0) parts.Add($"删除 {removed}");
+            if (dupes > 0) parts.Add($"去重 {dupes}");
             if (failed > 0) parts.Add($"失败 {failed}");
             ScanSummary = parts.Count == 0
                 ? "文件与索引一致，无变更。"
                 : string.Join(" · ", parts);
+            HasScanFailures = failed > 0;
+            ScanFailureText = string.Join("\n", failureDetails.Take(50));
+            if (failureDetails.Count > 0)
+            {
+                LogScanFailures(failureDetails);
+            }
         }
         catch (Exception ex)
         {
@@ -1092,6 +1476,28 @@ public partial class HomeViewModel : ObservableObject
             ScanProgressText = "";
             IsScanning = false;
             await RefreshAsync();
+        }
+    }
+
+    /// <summary>Appends refresh-scan failures to the crash log so they stay diagnosable
+    /// even when the toolbar summary is dismissed (same file as <see cref="LogPreviewCrash"/>).</summary>
+    private static void LogScanFailures(IEnumerable<string> details)
+    {
+        try
+        {
+            var lines = details.Take(50).ToList();
+            if (lines.Count == 0)
+            {
+                return;
+            }
+            var dir = Path.Combine(Path.GetTempPath(), "MyAlbum");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "crash.log"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} [ScanFolder] 刷新失败 {lines.Count} 个：\n  " + string.Join("\n  ", lines) + "\n\n");
+        }
+        catch
+        {
+            // never crash while logging
         }
     }
 
@@ -1138,31 +1544,32 @@ public partial class HomeViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Builds the 地点 sidebar tree (国家 → 省/州 → 市) from every photo's LLM-normalized
-    /// address. 直辖市（province 空）→ 国家→市；只到国家的 → 单级；「全部地点」根节点。
+    /// Builds the 地点 sidebar tree (国家 → 一级行政区 → 二级行政区) from every photo's LLM-normalized
+    /// address. 空级跳过：直辖市/城市州下沉后 province 有值（中国→天津市→和平区）；只到国家的 → 单级；
+    /// 「全部地点」根节点。区县/地标不进树（仅搜索）。
     /// </summary>
     private async Task BuildLocationsAsync()
     {
-        var gps = await _db.GetGpsPhotosAsync();
-        var withAddr = gps.Where(p => !string.IsNullOrWhiteSpace(p.PlaceCountry)).ToList();
+        // 只取三级地址列（country/province/city），不读含 BLOB 的 SELECT * 全列。
+        var rows = await _db.GetGpsPlaceRowsAsync();
 
         LocationTree.Clear();
-        LocationTree.Add(new LocationNode(null, null, null, "全部地点", withAddr.Count));
-        foreach (var countryGroup in withAddr.GroupBy(p => p.PlaceCountry!)
+        LocationTree.Add(new LocationNode(null, null, null, "全部地点", rows.Count));
+        foreach (var countryGroup in rows.GroupBy(r => r.Country)
                      .OrderByDescending(g => g.Count())
                      .ThenBy(g => g.Key))
         {
             var country = new LocationNode(countryGroup.Key, null, null, countryGroup.Key, countryGroup.Count());
             foreach (var provinceGroup in countryGroup
-                         .GroupBy(p => string.IsNullOrWhiteSpace(p.PlaceProvince) ? "" : p.PlaceProvince!)
+                         .GroupBy(r => string.IsNullOrWhiteSpace(r.Province) ? "" : r.Province)
                          .OrderByDescending(g => g.Count())
                          .ThenBy(g => g.Key))
             {
                 if (provinceGroup.Key.Length == 0)
                 {
-                    // 直辖市 / 小国：无省一级 → 直接挂城市（有则 国家→市，否则单级国家）
+                    // 无一级行政区（微型国家 / 缺省）：直接挂二级行政区（有则 国家→二级，否则单级国家）
                     foreach (var cityGroup in provinceGroup
-                                 .GroupBy(p => string.IsNullOrWhiteSpace(p.PlaceCity) ? "" : p.PlaceCity!)
+                                 .GroupBy(r => string.IsNullOrWhiteSpace(r.City) ? "" : r.City)
                                  .Where(g => g.Key.Length > 0)
                                  .OrderByDescending(g => g.Count()))
                     {
@@ -1173,7 +1580,7 @@ public partial class HomeViewModel : ObservableObject
                 {
                     var province = new LocationNode(countryGroup.Key, provinceGroup.Key, null, provinceGroup.Key, provinceGroup.Count());
                     foreach (var cityGroup in provinceGroup
-                                 .GroupBy(p => string.IsNullOrWhiteSpace(p.PlaceCity) ? "" : p.PlaceCity!)
+                                 .GroupBy(r => string.IsNullOrWhiteSpace(r.City) ? "" : r.City)
                                  .Where(g => g.Key.Length > 0)
                                  .OrderByDescending(g => g.Count()))
                     {
@@ -1260,21 +1667,26 @@ public partial class HomeViewModel : ObservableObject
         // 性能：30k 张逐文件 File.Exists 实测约 1 秒，是首页白屏主因。改为一次性扫描缓存
         // 目录得到存在文件名的 HashSet，内存判断代替逐张磁盘探测。
         var cacheDir = _thumbs.CacheDirectory;
-        var existingThumbs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        try
+        // 缓存目录清单移到后台线程枚举（万级文件），UI 线程只做内存判断。
+        var existingThumbs = await Task.Run(() =>
         {
-            if (Directory.Exists(cacheDir))
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
             {
-                foreach (var f in Directory.EnumerateFiles(cacheDir, "*.jpg", SearchOption.TopDirectoryOnly))
+                if (Directory.Exists(cacheDir))
                 {
-                    existingThumbs.Add(Path.GetFileName(f));
+                    foreach (var f in Directory.EnumerateFiles(cacheDir, "*.jpg", SearchOption.TopDirectoryOnly))
+                    {
+                        set.Add(Path.GetFileName(f));
+                    }
                 }
             }
-        }
-        catch
-        {
-            // 扫描失败则回退到逐文件判断
-        }
+            catch
+            {
+                // 扫描失败则回退到逐文件判断
+            }
+            return set;
+        });
 
         // 仅用缓存目录清单做"命中/缺失"判断：命中的直接拿到路径立即可见；缺失的先
         // 留空（占位），稍后后台并行生成并回填——避免大规模库首次刷新时为全部照片做
@@ -1316,6 +1728,8 @@ public partial class HomeViewModel : ObservableObject
         try
         {
             Photos.Clear();
+            // 重新填充网格时旧的多选状态已失效（PhotoGridItem 为新实例）。
+            ClearSelection();
             // 分块填充：每批 800 张 yield 一次，让 UI 线程能渲染首屏，而不是一口气 3 万次 Add。
             const int batch = 800;
             for (int i = 0; i < items.Count; i += batch)
@@ -1387,6 +1801,9 @@ public partial class HomeViewModel : ObservableObject
 
         _ = Task.Run(async () =>
         {
+            // 后台并行只做 WIC 解码 + 回填 UI 队列；写库改为批量 upsert，避免每张一个
+            // autocommit 事务反复占用 PhotoDatabase 的全局 _gate（万张时严重拖慢其他查询）。
+            var toPersist = new ConcurrentBag<PhotoRecord>();
             try
             {
                 await Parallel.ForEachAsync(missing,
@@ -1396,15 +1813,8 @@ public partial class HomeViewModel : ObservableObject
                         var path = await _thumbs.GetOrCreateThumbnailAsync(entry.Photo);
                         if (path is not null)
                         {
-                            try
-                            {
-                                entry.Photo.ThumbnailCachePath = path;
-                                await _db.UpsertPhotoAsync(entry.Photo);
-                            }
-                            catch
-                            {
-                                // 持久化失败不影响显示
-                            }
+                            entry.Photo.ThumbnailCachePath = path;
+                            toPersist.Add(entry.Photo);
                             queue.Enqueue((entry.Item, path));
                         }
                     });
@@ -1420,8 +1830,58 @@ public partial class HomeViewModel : ObservableObject
                 {
                     App.DispatcherQueue.TryEnqueue(() => FlushThumbBatch(queue));
                 }
+                await PersistThumbnailsAsync(toPersist, cts.Token);
             }
         }, cts.Token);
+    }
+
+    /// <summary>
+    /// Writes the generated-thumbnail paths back to the DB in one bulk transaction per batch
+    /// (500 rows), reusing <see cref="PhotoDatabase.BulkUpsertPhotosAsync"/> instead of
+    /// thousands of per-photo autocommit upserts.
+    /// </summary>
+    private async Task PersistThumbnailsAsync(ConcurrentBag<PhotoRecord> photos, CancellationToken ct)
+    {
+        if (photos.IsEmpty)
+        {
+            return;
+        }
+        const int batchSize = 500;
+        var batch = new List<PhotoRecord>(batchSize);
+        foreach (var photo in photos)
+        {
+            batch.Add(photo);
+            if (batch.Count >= batchSize)
+            {
+                try
+                {
+                    await _db.BulkUpsertPhotosAsync(batch, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch
+                {
+                    // 持久化失败不影响显示
+                }
+                batch = new List<PhotoRecord>(batchSize);
+            }
+        }
+        if (batch.Count > 0)
+        {
+            try
+            {
+                await _db.BulkUpsertPhotosAsync(batch, ct);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch
+            {
+                // 持久化失败不影响显示
+            }
+        }
     }
 
     private static void FlushThumbBatch(ConcurrentQueue<(PhotoGridItem Item, string Path)> queue)

@@ -149,6 +149,101 @@ public sealed class GpsPlaceService
     }
 
     /// <summary>
+    /// Resolves place names for a caller-supplied list of GPS photos, applying the same
+    /// neighbor-reuse shortcut as <see cref="BackfillAsync"/> (150 m, real anchors only — never
+    /// cascades through reused results). Used by the home-page right-click "批量反解+解析（相似复用）":
+    /// unlike Backfill it re-resolves photos that may already have a place, and unlike the plain
+    /// batch it prefers copying a neighbor's place over hitting the network. Returns only the
+    /// successfully-resolved items; the caller persists them (this method writes nothing).
+    /// </summary>
+    public async Task<List<(PhotoRecord Photo, string Place, string Source)>> ResolvePhotosAsync(
+        IReadOnlyList<PhotoRecord> photos,
+        IProgress<(int Done, int Total, string File)>? progress = null,
+        CancellationToken ct = default)
+    {
+        var withGps = photos.Where(p => p.GpsLatitude is not null && p.GpsLongitude is not null).ToList();
+        var resolved = new ConcurrentBag<(PhotoRecord Photo, string Place, string Source)>();
+        if (withGps.Count == 0)
+        {
+            progress?.Report((0, 0, ""));
+            return resolved.ToList();
+        }
+
+        // Seed the anchor pool with previously resolved photos (real anchors only, no reuse).
+        var anchors = new AnchorIndex();
+        foreach (var a in await _db.GetResolvedAnchorsAsync())
+        {
+            if (a.GpsLatitude is { } la && a.GpsLongitude is { } lo && !string.IsNullOrWhiteSpace(a.GpsPlace))
+            {
+                anchors.Add(la, lo, a.GpsPlace);
+            }
+        }
+
+        int done = 0;
+        long lastReport = 0;
+        await Parallel.ForEachAsync(withGps, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = ProcessingConfig.GeocodeParallelism,
+            CancellationToken = ct,
+        }, async (photo, token) =>
+        {
+            if (photo.GpsLatitude is not { } lat || photo.GpsLongitude is not { } lon)
+            {
+                return;
+            }
+            string? place = null;
+            string? usedSource = null;
+
+            var reuse = anchors.FindNearest(lat, lon, ReuseRadiusMeters);
+            if (reuse is not null)
+            {
+                place = reuse;
+                usedSource = "reuse";
+            }
+            else
+            {
+                try
+                {
+                    var result = await _geocoder.ResolveAsync(lat, lon, token);
+                    place = result.Place;
+                    usedSource = result.Source;
+                    if (place is not null && usedSource is "amap" or "osm")
+                    {
+                        anchors.Add(lat, lon, place); // newly resolved → eligible for reuse now
+                    }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (OperationCanceledException)
+                {
+                    place = null; // timeout or unrelated cancel → this photo fails, batch continues
+                }
+                catch
+                {
+                    place = null;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(place))
+            {
+                resolved.Add((photo, place!, usedSource ?? (GeocodeConfig.Source == "amap" ? "amap" : "osm")));
+            }
+
+            int d = Interlocked.Increment(ref done);
+            // 节流：至少每 100ms 报一次，结束时强制补一帧。
+            if (d == withGps.Count || Environment.TickCount64 - lastReport >= 100)
+            {
+                Interlocked.Exchange(ref lastReport, Environment.TickCount64);
+                progress?.Report((d, withGps.Count, Path.GetFileName(photo.FilePath)));
+            }
+        });
+
+        return resolved.ToList();
+    }
+
+    /// <summary>
     /// Spatial index of resolved anchors by a coarse lat/lon grid. Only <see cref="GpsPlaceService"/>
     /// adds real anchors (never reused results), so reuse can never cascade.
     /// </summary>

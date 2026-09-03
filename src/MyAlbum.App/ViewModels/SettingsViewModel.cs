@@ -653,6 +653,7 @@ public partial class SettingsViewModel : ObservableObject
             // 清理后不再重复全量 Verify（那会再扫一遍缩略图与完整性），改用清理前已算好的计数。
             var removed = new List<string>();
             if (result.RemovedMissingPhotos > 0) removed.Add($"移除缺失照片记录 {result.RemovedMissingPhotos} 个");
+            if (result.RemovedCaseDuplicates > 0) removed.Add($"移除重复路径记录 {result.RemovedCaseDuplicates} 个");
             if (result.RemovedOrphanThumbnails > 0) removed.Add($"删除孤立缩略图 {result.RemovedOrphanThumbnails} 个（释放 {FormatBytes(result.FreedThumbnailBytes)}）");
             if (result.RemovedOrphanPhotoTags > 0) removed.Add($"移除孤立标签关联 {result.RemovedOrphanPhotoTags} 条");
             if (result.RemovedOrphanFaces > 0) removed.Add($"移除孤立人脸记录 {result.RemovedOrphanFaces} 条");
@@ -740,6 +741,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         var report = await Task.Run(() => _maintenance.VerifyAsync());
         bool hasWork = report.RedundantMissingPhotoCount > 0
+            || report.CaseDuplicateCount > 0
             || report.OrphanThumbnailCount > 0
             || report.OrphanPhotoTagCount > 0
             || report.OrphanFaceCount > 0;
@@ -755,6 +757,10 @@ public partial class SettingsViewModel : ObservableObject
         if (report.RedundantMissingPhotoCount > 0)
         {
             lines.Add($"· 缺失照片记录 {report.RedundantMissingPhotoCount} 个（文件已不存在）");
+        }
+        if (report.CaseDuplicateCount > 0)
+        {
+            lines.Add($"· 重复路径记录 {report.CaseDuplicateCount} 组（同一文件因大小写不同被重复索引）");
         }
         if (report.OrphanThumbnailCount > 0)
         {
@@ -781,6 +787,9 @@ public partial class SettingsViewModel : ObservableObject
             integrity,
             $"照片记录 {report.PhotoCount} 个（正常 {report.ActivePhotoCount}）",
             $"缺失照片记录 {report.RedundantMissingPhotoCount} 个（文件已不存在，可清理）",
+            report.CaseDuplicateCount > 0
+                ? $"重复路径记录 {report.CaseDuplicateCount} 组（同一文件因大小写不同被重复索引，可清理）"
+                : "重复路径记录 0 组",
             $"缩略图 {report.TotalThumbnailCount} 个，其中孤立 {report.OrphanThumbnailCount} 个（{FormatBytes(report.OrphanThumbnailBytes)}）",
             $"孤立标签关联 {report.OrphanPhotoTagCount} 条 · 孤立人脸 {report.OrphanFaceCount} 条",
             $"数据库体积 {FormatBytes(report.DatabaseBytes)}",

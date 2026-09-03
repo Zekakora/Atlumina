@@ -43,9 +43,9 @@ public partial class AlbumsViewModel : ObservableObject
         {
             var item = new SmartAlbumItem(album);
             var f = item.Filter;
-            var count = (await _db.QueryPhotosAsync(
+            var count = await _db.CountPhotosAsync(
                 f.FolderPath, f.CameraModel, f.RatingMin, f.TagName,
-                f.SearchText, f.DateFrom, f.DateTo, 10000)).Count;
+                f.SearchText, f.DateFrom, f.DateTo);
             item.PhotoCount = count;
             AlbumCards.Add(item);
         }

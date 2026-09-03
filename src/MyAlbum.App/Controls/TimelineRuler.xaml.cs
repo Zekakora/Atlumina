@@ -73,9 +73,6 @@ public sealed partial class TimelineRuler : UserControl
         }
     }
 
-    /// <summary>Raised when the ruler is activated (hover) or deactivated, so the host can mirror the fade to its scrim layer.</summary>
-    public event EventHandler<bool>? ActivationChanged;
-
     /// <summary>Day index (ascending) for the current photo list; each day holds the first photo index in the DESC list.</summary>
     public IReadOnlyList<DayBlock> Days
     {
@@ -111,7 +108,7 @@ public sealed partial class TimelineRuler : UserControl
         }
         Thumb.Visibility = Visibility.Visible;
         double viewportFraction = _target.ViewportHeight / Math.Max(1, _target.ViewportHeight + _target.ScrollableHeight);
-        Thumb.Height = Math.Max(20, Root.ActualHeight * viewportFraction);
+        Thumb.Height = Math.Max(26, Root.ActualHeight * viewportFraction);
 
         // Position the thumb by the TIME of the day currently at the top of the viewport
         // (not the raw scroll fraction). This is the same time coordinate the drag path
@@ -171,7 +168,7 @@ public sealed partial class TimelineRuler : UserControl
     private void OnActivated(PointerRoutedEventArgs e)
     {
         AnimateOpacity(RulerVisual, 1, 140);
-        ActivationChanged?.Invoke(this, true);
+        AnimateOpacity(Scrim, 0.9, 140);
         var y = e.GetCurrentPoint(this).Position.Y;
         ShowTooltipAtPointer(y, dayPrecision: false);
     }
@@ -179,7 +176,7 @@ public sealed partial class TimelineRuler : UserControl
     private void OnDeactivated()
     {
         AnimateOpacity(RulerVisual, 0, 140);
-        ActivationChanged?.Invoke(this, false);
+        AnimateOpacity(Scrim, 0.5, 140);
         HideTooltip();
     }
 
@@ -228,7 +225,7 @@ public sealed partial class TimelineRuler : UserControl
     /// <summary>Called to scroll the photo list to a photo index (newest-first). Set by the host page.</summary>
     public Action<int>? JumpToIndex;
 
-    /// <summary>Uniform pixel→date mapping: scroll the grid to the day under the pointer.</summary>
+    /// <summary>Uniform pixel→photo mapping: scroll the grid to the photo under the pointer.</summary>
     private void ScrubTo(double pointerY)
     {
         if (_days.Count == 0)
@@ -236,19 +233,19 @@ public sealed partial class TimelineRuler : UserControl
             return;
         }
         double frac = Math.Clamp(pointerY / Math.Max(1, Root.ActualHeight), 0, 1);
-        var day = TargetDayAtFraction(frac);
-        // Snap the thumb to the day's index position so releasing the drag never shifts it.
-        Thumb.Margin = new Thickness(0, IndexFractionOf(day.FirstIndexInDesc) * TrackHeight, 11, 0);
+        int idx = TargetPhotoIndexAtFraction(frac);
+        // Snap the thumb to the photo's index position so releasing the drag never shifts it.
+        Thumb.Margin = new Thickness(0, IndexFractionOf(idx) * TrackHeight, 12, 0);
 
         try
         {
             if (JumpToIndex is not null)
             {
-                JumpToIndex(day.FirstIndexInDesc);
+                JumpToIndex(idx);
             }
             else if (_target is not null)
             {
-                double offset = IndexToScrollOffset(day.FirstIndexInDesc);
+                double offset = IndexToScrollOffset(idx);
                 _target.ChangeView(null, offset, null, disableAnimation: true);
             }
         }
@@ -258,12 +255,20 @@ public sealed partial class TimelineRuler : UserControl
         }
     }
 
+    /// <summary>
+    /// Photo index (DESC order) under the pointer fraction, with exact-photo precision.
+    /// Photo-level (rather than day-first) mapping lets a scrub still slide within a single
+    /// day — a filtered set that all falls on one day previously always jumped back to photo 0.
+    /// </summary>
+    private int TargetPhotoIndexAtFraction(double frac)
+    {
+        int total = TotalPhotos;
+        return (int)Math.Clamp(frac * total, 0, total - 1);
+    }
+
     private DayBlock TargetDayAtFraction(double frac)
     {
-        // The track is index-space (same as the left grid). Map the pointer fraction to a
-        // photo index, then find the day block that owns that index.
-        int total = TotalPhotos;
-        int idx = (int)Math.Clamp(frac * total, 0, total - 1);
+        int idx = TargetPhotoIndexAtFraction(frac);
         return _days[DayIndexForPhotoIndex(idx)];
     }
 
@@ -401,8 +406,8 @@ public sealed partial class TimelineRuler : UserControl
     {
         var line = new Rectangle
         {
-            Width = major ? 12 : 6,
-            Height = 1,
+            Width = major ? 18 : 9,
+            Height = major ? 2 : 1,
             Fill = ThemeBrush.Resolve(this, "TextFillColorSecondaryBrush"),
             Opacity = major ? 0.9 : 0.4,
         };
@@ -416,9 +421,9 @@ public sealed partial class TimelineRuler : UserControl
         var label = new TextBlock
         {
             Text = year.ToString(),
-            FontSize = 10,
+            FontSize = 12,
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Opacity = 0.9,
+            Opacity = 0.95,
             Foreground = ThemeBrush.Resolve(this, "TextFillColorSecondaryBrush"),
         };
         label.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));

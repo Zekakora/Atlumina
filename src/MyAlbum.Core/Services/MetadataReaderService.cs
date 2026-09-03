@@ -68,7 +68,7 @@ public sealed class MetadataReaderService
 
         if (gps is not null)
         {
-            var loc = gps.GetGeoLocation();
+            var loc = TryGetGeoLocation(gps);
             if (loc is not null)
             {
                 photo.GpsLatitude = loc.Value.Latitude;
@@ -83,6 +83,49 @@ public sealed class MetadataReaderService
         }
 
         return photo;
+    }
+
+    /// <summary>
+    /// Parses GPS latitude/longitude from the GPS IFD. Unlike
+    /// <c>GpsDirectory.GetGeoLocation()</c>, this tolerates a missing / empty *Ref tag —
+    /// some tools (and Windows) write coordinates without refs, which MetadataExtractor's
+    /// own method rejects. Positive values without a ref are assumed N/E, negative S/W.
+    /// </summary>
+    private static GeoLocation? TryGetGeoLocation(GpsDirectory gps)
+    {
+        var lat = gps.GetRationalArray(GpsDirectory.TagLatitude);
+        var lon = gps.GetRationalArray(GpsDirectory.TagLongitude);
+        if (lat is null || lon is null || lat.Length < 3 || lon.Length < 3)
+        {
+            return null;
+        }
+
+        double latDeg = DmsToDecimal(lat);
+        double lonDeg = DmsToDecimal(lon);
+        string latRef = (gps.GetString(GpsDirectory.TagLatitudeRef) ?? "").Trim().ToUpperInvariant();
+        string lonRef = (gps.GetString(GpsDirectory.TagLongitudeRef) ?? "").Trim().ToUpperInvariant();
+        if (latRef.Length == 0)
+        {
+            latRef = latDeg >= 0 ? "N" : "S";
+        }
+        if (lonRef.Length == 0)
+        {
+            lonRef = lonDeg >= 0 ? "E" : "W";
+        }
+
+        latDeg = latRef == "S" ? -Math.Abs(latDeg) : Math.Abs(latDeg);
+        lonDeg = lonRef == "W" ? -Math.Abs(lonDeg) : Math.Abs(lonDeg);
+        return new GeoLocation(latDeg, lonDeg);
+    }
+
+    /// <summary>Converts a 3-element DMS rational array (deg/min/sec) to decimal degrees.</summary>
+    private static double DmsToDecimal(Rational[] dms)
+    {
+        double deg = Math.Abs((double)dms[0].Numerator / dms[0].Denominator);
+        double min = Math.Abs((double)dms[1].Numerator / dms[1].Denominator);
+        double sec = Math.Abs((double)dms[2].Numerator / dms[2].Denominator);
+        double value = deg + min / 60 + sec / 3600;
+        return dms[0].Numerator < 0 ? -value : value;
     }
 
     /// <summary>

@@ -100,7 +100,7 @@ public partial class AppState : ObservableObject
 
     /// <summary>每次 LLM 请求处理的地点名数量（20..100）。</summary>
     [ObservableProperty]
-    public partial int LlmBatchSize { get; set; } = 40;
+    public partial int LlmBatchSize { get; set; } = 20;
 
     /// <summary>扫描 / 导入时的文件级并发数（1..64）。硬盘快可调高，文件夹之间也会并行，
     /// 但同时在解码的文件总数被限制为该值。</summary>
@@ -216,7 +216,7 @@ public partial class AppState : ObservableObject
                 AmapApiSecret = data.AmapApiSecret ?? "";
                 GeocodeParallelism = Math.Clamp(data.GeocodeParallelism <= 0 ? 4 : data.GeocodeParallelism, 1, MyAlbum.Core.Services.ProcessingConfig.MaxParallelism);
                 LlmParallelism = Math.Clamp(data.LlmParallelism <= 0 ? 16 : data.LlmParallelism, 1, MyAlbum.Core.Services.ProcessingConfig.MaxParallelism);
-                LlmBatchSize = Math.Clamp(data.LlmBatchSize <= 0 ? 40 : data.LlmBatchSize, MyAlbum.Core.Services.ProcessingConfig.MinLlmBatch, MyAlbum.Core.Services.ProcessingConfig.MaxLlmBatch);
+                LlmBatchSize = Math.Clamp(data.LlmBatchSize <= 0 ? 20 : data.LlmBatchSize, MyAlbum.Core.Services.ProcessingConfig.MinLlmBatch, MyAlbum.Core.Services.ProcessingConfig.MaxLlmBatch);
                 ScanParallelism = Math.Clamp(data.ScanParallelism <= 0 ? 8 : data.ScanParallelism, 1, 64);
                 SyncLlmConfig();
                 SyncGeocodeConfig();
@@ -315,7 +315,7 @@ public partial class AppState : ObservableObject
         public string AmapApiSecret { get; set; } = "";
         public int GeocodeParallelism { get; set; } = 4;
         public int LlmParallelism { get; set; } = 16;
-        public int LlmBatchSize { get; set; } = 40;
+        public int LlmBatchSize { get; set; } = 20;
         public int ScanParallelism { get; set; } = 8;
     }
 
